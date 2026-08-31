@@ -129,19 +129,30 @@ export const switchToStudionet = async () => {
   }
 };
 
-export const waitForTx = async (client, hash) => {
+export const waitForTx = async (client, hash, { retries = 30, interval = 2000 } = {}) => {
   if (!hash) return null;
   if (client && typeof client.waitForTransactionReceipt === 'function') {
     try {
       return await client.waitForTransactionReceipt({
         hash,
         status: 'FINALIZED',
-        retries: 30,
-        interval: 2000,
+        retries,
+        interval,
       });
     } catch (err) {
       console.warn('waitForTransactionReceipt note:', err);
     }
   }
   return hash;
+};
+
+export const receiptLooksFailed = (receipt) => {
+  if (!receipt || typeof receipt !== 'object') return false;
+  const blob = JSON.stringify(receipt).toLowerCase();
+  return (
+    blob.includes('rollback') ||
+    blob.includes('"error"') ||
+    blob.includes('failed to fetch') ||
+    blob.includes('execution result":"error')
+  );
 };

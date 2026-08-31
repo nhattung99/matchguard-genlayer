@@ -30,6 +30,7 @@ import {
   formatWriteError,
   txExplorerUrl,
   addressExplorerUrl,
+  receiptLooksFailed,
 } from './genlayerClient.js';
 import {
   CATEGORIES,
@@ -234,7 +235,7 @@ export default function App() {
     if (activeMatchId) fetchDetail(activeMatchId);
   }, [fetchList, activeMatchId]);
 
-  const runWrite = async (fnName, args, value, { resolving } = {}) => {
+  const runWrite = async (fnName, args, value, { resolving, waitRetries, waitInterval } = {}) => {
     requireReady();
     setErrorMessage(null);
     setTxHash(null);
@@ -249,9 +250,26 @@ export default function App() {
         ...(value !== undefined ? { value } : {}),
       });
       setTxHash(hash);
-      await waitForTx(client, hash);
+      const receipt = await waitForTx(client, hash, {
+        retries: waitRetries ?? 30,
+        interval: waitInterval ?? 2000,
+      });
       await fetchList();
-      if (args && args[0] !== undefined) await fetchDetail(String(args[0]));
+      const detailId = args && args[0] !== undefined ? String(args[0]) : '';
+      const row = detailId ? await fetchDetail(detailId) : null;
+      if (fnName === 'resolve_challenge' && row && row.status === 'CHALLENGED') {
+        throw new Error(
+          `AI transaction finalized but GenVM rolled back — match is still CHALLENGED. ` +
+          `Open Explorer: ${txExplorerUrl(hash)}. ` +
+          `Usual cause: web.render failed on a JS-heavy URL (HLTV, Twitter). ` +
+          `Create a new match and challenge with two Wikipedia pages.`
+        );
+      }
+      if (receiptLooksFailed(receipt)) {
+        throw new Error(
+          `Transaction finalized with a GenVM error. Check Explorer: ${txExplorerUrl(hash)}`
+        );
+      }
       return hash;
     } catch (err) {
       setErrorMessage(formatWriteError(err) || `${fnName} failed`);
@@ -336,7 +354,11 @@ export default function App() {
 
   const handleResolve = async (matchId) => {
     try {
-      await runWrite('resolve_challenge', [matchId], undefined, { resolving: matchId });
+      await runWrite('resolve_challenge', [matchId], undefined, {
+        resolving: matchId,
+        waitRetries: 90,
+        waitInterval: 4000,
+      });
       setActiveMatchId(matchId);
       await fetchDetail(matchId);
     } catch (err) {
@@ -382,7 +404,7 @@ export default function App() {
             setRefUrls([...EXAMPLE_REFERENCE_URLS]);
           }}
         >
-          Fill example Wikipedia + HLTV URLs
+          Fill example Wikipedia URLs (GenVM can fetch these)
         </button>
         {evidenceUrls.map((u, i) => (
           <div className="url-row" key={`e-${i}`}>
@@ -582,17 +604,24 @@ export default function App() {
           )}
 
           {isOpen && status === 'CHALLENGED' && (
-            <button className="btn-ai" type="button" disabled={loading} onClick={() => handleResolve(row.match_id)}>
-              {resolvingId === row.match_id ? (
-                <>
-                  <span className="spinner" /> AI is reading the evidence…
-                </>
-              ) : (
-                <>
-                  <Shield size={16} /> Request AI adjudication
-                </>
-              )}
-            </button>
+            <>
+              <div className="warn-box">
+                Consensus can take several minutes. If Explorer shows GenVM ERROR on a failed URL
+                (HLTV, Twitter), this match stays CHALLENGED — start a new match and paste two
+                Wikipedia pages as references.
+              </div>
+              <button className="btn-ai" type="button" disabled={loading} onClick={() => handleResolve(row.match_id)}>
+                {resolvingId === row.match_id ? (
+                  <>
+                    <span className="spinner" /> AI is reading the evidence — wait for consensus…
+                  </>
+                ) : (
+                  <>
+                    <Shield size={16} /> Request AI adjudication
+                  </>
+                )}
+              </button>
+            </>
           )}
 
           {isOpen && status === 'PAYOUT_FAILED' && isParty && (

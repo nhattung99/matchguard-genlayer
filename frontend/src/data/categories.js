@@ -47,11 +47,11 @@ export const DEADLINE_PRESETS = [
   { id: 'past', label: 'Already passed (refund demo)', offsetSec: '-60' },
 ];
 
-/** Real public pages — paste-ready. Do not invent gists or localhost URLs. */
+/** Wikipedia pages — GenVM web.render can fetch these. JS-heavy sites (HLTV, Twitter) fail. */
 export const EXAMPLE_EVIDENCE_URL = 'https://en.wikipedia.org/wiki/Cheating_in_online_games';
 export const EXAMPLE_REFERENCE_URLS = [
   'https://en.wikipedia.org/wiki/Valve_Anti-Cheat',
-  'https://www.hltv.org/',
+  'https://en.wikipedia.org/wiki/Esports',
 ];
 
 export function unixNow() {
