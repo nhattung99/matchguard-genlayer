@@ -608,7 +608,7 @@ export default function App() {
   return (
     <div className="app">
       <div className="free-banner">
-        Miễn phí sử dụng — chỉ tốn phí gas mạng GenLayer khi ký giao dịch. Không có phí nền tảng nào khác.
+        Free to use — you only pay GenLayer network gas when you sign a transaction. There is no platform fee.
       </div>
 
       {!hasContractAddress && (
@@ -654,7 +654,7 @@ export default function App() {
           <li>If nobody challenges, anyone can click <strong>Claim prize</strong> after the window. If a player challenges, paste ≥1 evidence URL + ≥2 independent public URLs, then <strong>Request AI adjudication</strong>.</li>
           <li>Read the on-chain <strong>verdict</strong> + <strong>reason</strong> + confidence, then open the transaction on{' '}
             <a className="explorer-link" href={addressExplorerUrl(CONTRACT_ADDRESS)} target="_blank" rel="noreferrer">
-              Studio Explorer <ExternalLink size={13} />
+              Explorer <ExternalLink size={13} />
             </a>
             .
           </li>

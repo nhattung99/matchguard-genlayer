@@ -20,7 +20,7 @@ export {
 const ZERO = '0x0000000000000000000000000000000000000000';
 const rawAddress = (import.meta.env.VITE_CONTRACT_ADDRESS || '').trim();
 
-export const EXPLORER_BASE = 'https://explorer-studio.genlayer.com';
+export const EXPLORER_BASE = 'https://genlayer-explorer.vercel.app';
 
 export const txExplorerUrl = (hash) => {
   if (!hash) return EXPLORER_BASE;

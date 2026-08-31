@@ -6,13 +6,13 @@ MatchGuard does not work without GenLayer: no EVM contract can read unstructured
 
 ## Live App
 
-_(pending Vercel deploy — after the contract address is confirmed on Studio)_
+_(pending Vercel deploy)_
 
 ## Deployed Contract
 
 - **Network:** studionet (GenLayer Studio hosted)
-- **Address:** _(pending — paste after Studio `Result: SUCCESS`)_
-- **Explorer:** https://explorer-studio.genlayer.com
+- **Address:** `0x3c48A5Ed4F3263958A6761FA598635F9Ce435FFD`
+- **Explorer:** https://genlayer-explorer.vercel.app/address/0x3c48A5Ed4F3263958A6761FA598635F9Ce435FFD
 
 ## How to try
 
@@ -22,7 +22,7 @@ _(pending Vercel deploy — after the contract address is confirmed on Studio)_
 4. Create a match. Pick category chips (FPS / MOBA / Fighting / Other), paste two player addresses, a prize chip, a result deadline, and a challenge window (6h / 12h / 24h / 48h, plus a 2-minute demo). Prize strings are parsed with `parseGenToWei` (no float).
 5. Share the `?match=<id>` link. A player or the organizer declares **A** or **B** before the deadline.
 6. The UI shows the challenge countdown. If it closes with no challenge, anyone can click **Claim prize**. If a player challenges, paste ≥1 evidence URL + ≥2 independent public URLs, then **Request AI adjudication**. Consensus is slower than a normal write — wait for the spinner.
-7. Read the verdict + `reason` + confidence. Open the tx on Studio Explorer. Confirm **GenVM Result: SUCCESS**, not only `FINALIZED`.
+7. Read the verdict + `reason` + confidence. Open the tx on [Explorer](https://genlayer-explorer.vercel.app/address/0x3c48A5Ed4F3263958A6761FA598635F9Ce435FFD). Confirm **GenVM Result: SUCCESS**, not only `FINALIZED`.
 
 **Expected outcome:** `AWAITING_RESULT` → `RESULT_DECLARED` → either `RESOLVED_UNCHALLENGED` (no challenge) or `CHALLENGED` → `RESOLVED_NO_CHEAT` / `RESOLVED_CHEAT_CONFIRMED`. Low confidence (`< 60`) becomes `DISPUTED_LOW_CONFIDENCE` so a player can re-challenge with new evidence (while the window is still open). Transfer failure becomes `PAYOUT_FAILED` with a retry that does **not** re-run AI. If nobody declares before the deadline, the organizer claims `EXPIRED_REFUNDED`.
 
