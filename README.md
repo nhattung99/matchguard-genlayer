@@ -6,7 +6,7 @@ MatchGuard does not work without GenLayer: no EVM contract can read unstructured
 
 ## Live App
 
-_(pending Vercel deploy)_
+https://matchguard-genlayer.vercel.app
 
 ## Deployed Contract
 
