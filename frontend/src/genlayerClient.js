@@ -132,8 +132,9 @@ export const formatWriteError = (err) => {
   }
   if (isRateLimitError(err)) {
     const wait = getRetryAfterSeconds(err);
-    const mins = wait ? Math.max(1, Math.ceil(wait / 60)) : 10;
-    return `Studionet rate limit reached. Wait about ${mins} minute(s). Do not refresh or click Create. Close extra MatchGuard tabs, then retry once.`;
+    const mins = wait > 0 ? ((wait + 59) / 60) | 0 : 10;
+    const shown = mins < 1 ? 1 : mins;
+    return `Studionet rate limit reached. Wait about ${shown} minute(s). Do not refresh or click Create. Close extra MatchGuard tabs, then retry once.`;
   }
   if (low.includes('failed to fetch') || low.includes('unknown rpc')) {
     return 'Cannot reach Studionet RPC (Failed to fetch). Confirm MetaMask is on studionet (chain 61999), wait if you hit the hourly limit, then retry once.';
