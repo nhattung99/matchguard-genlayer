@@ -28,6 +28,7 @@ import {
   toWeiString,
   toPercentInt,
   formatWriteError,
+  isRateLimitError,
   txExplorerUrl,
   addressExplorerUrl,
   receiptLooksFailed,
@@ -153,6 +154,7 @@ export default function App() {
     try {
       setListLoading(true);
       let rows = [];
+      let listOk = false;
       try {
         const res = await client.readContract({
           address: CONTRACT_ADDRESS,
@@ -161,11 +163,13 @@ export default function App() {
         });
         const data = parseJsonMaybe(res);
         if (Array.isArray(data)) rows = data;
+        listOk = true;
       } catch (err) {
         console.warn('list_matches failed:', err);
+        if (!isRateLimitError(err)) setErrorMessage(formatWriteError(err));
       }
 
-      if (rows.length === 0) {
+      if (rows.length === 0 && listOk) {
         try {
           const countRaw = await client.readContract({
             address: CONTRACT_ADDRESS,
@@ -201,17 +205,6 @@ export default function App() {
     }
   }, []);
 
-  const readCount = async () => {
-    const client = getReadClient();
-    if (!client) return 0n;
-    const countRaw = await client.readContract({
-      address: CONTRACT_ADDRESS,
-      functionName: 'get_count',
-      args: [],
-    });
-    return BigInt(String(countRaw ?? '0').replace(/[^0-9]/g, '') || '0');
-  };
-
   const fetchDetail = async (matchId) => {
     if (!hasContractAddress || !matchId) return null;
     try {
@@ -242,6 +235,7 @@ export default function App() {
     if (resolving) setResolvingId(resolving);
     setLoading(true);
     try {
+      await switchToStudionet();
       const client = getWriteClient(account);
       const hash = await client.writeContract({
         address: CONTRACT_ADDRESS,
@@ -250,11 +244,18 @@ export default function App() {
         ...(value !== undefined ? { value } : {}),
       });
       setTxHash(hash);
-      const receipt = await waitForTx(client, hash, {
-        retries: waitRetries ?? 30,
-        interval: waitInterval ?? 2000,
-      });
-      await fetchList();
+      let receipt = hash;
+      if (fnName !== 'create_match') {
+        receipt = await waitForTx(client, hash, {
+          retries: waitRetries ?? 12,
+          interval: waitInterval ?? 3000,
+        });
+      }
+      try {
+        await fetchList();
+      } catch (err) {
+        console.warn('post-write list failed:', err);
+      }
       const detailId = args && args[0] !== undefined ? String(args[0]) : '';
       const row = detailId ? await fetchDetail(detailId) : null;
       if (fnName === 'resolve_challenge' && row && row.status === 'CHALLENGED') {
@@ -306,25 +307,14 @@ export default function App() {
       }
       if (sameAddr(playerA, playerB)) throw new Error('Player A and Player B must be different.');
       const windowSec = BigInt(windowPreset.seconds);
-      const countBefore = await readCount();
-      const hash = await runWrite(
+      await runWrite(
         'create_match',
         [playerA.trim(), playerB.trim(), description.trim(), deadlineUnix, windowSec],
         wei
       );
-      const countAfter = await readCount();
-      if (countAfter <= countBefore) {
-        throw new Error(
-          `Transaction finalized but the match was not created (GenVM likely ERROR). Check Explorer: ${txExplorerUrl(hash)}`
-        );
-      }
-      const newId = (countAfter - 1n).toString();
-      setActiveMatchId(newId);
-      await fetchDetail(newId);
-      await copyShare(newId);
       setTab('list');
     } catch (err) {
-      setErrorMessage(err?.message || 'Create match failed');
+      setErrorMessage(formatWriteError(err) || 'Create match failed');
     }
   };
 
@@ -334,7 +324,7 @@ export default function App() {
     try {
       await runWrite('declare_result', [matchId, side]);
     } catch (err) {
-      setErrorMessage(err?.message || 'Declare result failed');
+      setErrorMessage(formatWriteError(err) || 'Declare result failed');
     }
   };
 
@@ -348,7 +338,7 @@ export default function App() {
       setEvidenceUrls(['']);
       setRefUrls(['', '']);
     } catch (err) {
-      setErrorMessage(err?.message || 'Challenge failed');
+      setErrorMessage(formatWriteError(err) || 'Challenge failed');
     }
   };
 
@@ -362,7 +352,7 @@ export default function App() {
       setActiveMatchId(matchId);
       await fetchDetail(matchId);
     } catch (err) {
-      setErrorMessage(err?.message || 'AI adjudication failed');
+      setErrorMessage(formatWriteError(err) || 'AI adjudication failed');
     }
   };
 
@@ -370,7 +360,7 @@ export default function App() {
     try {
       await runWrite('finalize_unchallenged_payout', [matchId]);
     } catch (err) {
-      setErrorMessage(err?.message || 'Claim prize failed');
+      setErrorMessage(formatWriteError(err) || 'Claim prize failed');
     }
   };
 
@@ -378,7 +368,7 @@ export default function App() {
     try {
       await runWrite('claim_expired_refund', [matchId]);
     } catch (err) {
-      setErrorMessage(err?.message || 'Expired refund failed');
+      setErrorMessage(formatWriteError(err) || 'Expired refund failed');
     }
   };
 
@@ -386,7 +376,7 @@ export default function App() {
     try {
       await runWrite('retry_resolution', [matchId]);
     } catch (err) {
-      setErrorMessage(err?.message || 'Retry payout failed');
+      setErrorMessage(formatWriteError(err) || 'Retry payout failed');
     }
   };
 

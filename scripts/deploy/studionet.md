@@ -6,7 +6,7 @@ Deploy from GenLayer Studio **Run & Debug**. Confirm **GenVM Result: SUCCESS**, 
 |---|---|
 | Network | studionet |
 | Address | `0x3c48A5Ed4F3263958A6761FA598635F9Ce435FFD` |
-| Explorer | https://genlayer-explorer.vercel.app/address/0x3c48A5Ed4F3263958A6761FA598635F9Ce435FFD |
+| Explorer | https://explorer-studio.genlayer.com/address/0x3c48A5Ed4F3263958A6761FA598635F9Ce435FFD |
 
 `create_match` must be `@gl.public.write.payable`. A non-payable write that sends GEN fails with:
 

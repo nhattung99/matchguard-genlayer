@@ -20,7 +20,8 @@ export {
 const ZERO = '0x0000000000000000000000000000000000000000';
 const rawAddress = (import.meta.env.VITE_CONTRACT_ADDRESS || '').trim();
 
-export const EXPLORER_BASE = 'https://genlayer-explorer.vercel.app';
+export const EXPLORER_BASE = 'https://explorer-studio.genlayer.com';
+export const STUDIONET_RPC = 'https://studio.genlayer.com/api';
 
 export const txExplorerUrl = (hash) => {
   if (!hash) return EXPLORER_BASE;
@@ -50,7 +51,7 @@ const toAddress = (account) => {
 
 export const getReadClient = () => {
   try {
-    return createClient({ chain: studionet });
+    return createClient({ chain: studionet, endpoint: STUDIONET_RPC });
   } catch (err) {
     console.warn('Read client init failed:', err);
     return null;
@@ -63,6 +64,7 @@ export const getWriteClient = (account) => {
   }
   return createClient({
     chain: studionet,
+    endpoint: STUDIONET_RPC,
     account: toAddress(account),
     provider: window.ethereum,
   });
@@ -80,14 +82,61 @@ export const parseJsonMaybe = (res) => {
   return res;
 };
 
+const errorBlob = (err) =>
+  [
+    err?.shortMessage,
+    err?.details,
+    err?.cause?.message,
+    err?.cause?.data?.message,
+    err?.message,
+    err,
+  ]
+    .filter(Boolean)
+    .map(String)
+    .join(' ');
+
+export const getRetryAfterSeconds = (err) => {
+  const nodes = [err, err?.cause, err?.cause?.cause, err?.data, err?.cause?.data];
+  for (const node of nodes) {
+    const n = Number(node?.retry_after_seconds ?? node?.data?.retry_after_seconds);
+    if (Number.isFinite(n) && n > 0) return Math.ceil(n);
+  }
+  return 0;
+};
+
+export const isRateLimitError = (err) => {
+  const low = errorBlob(err).toLowerCase();
+  return (
+    low.includes('rate limit') ||
+    low.includes('-32029') ||
+    low.includes('-32429') ||
+    low.includes('429')
+  );
+};
+
 export const formatWriteError = (err) => {
-  const msg = String(err?.shortMessage || err?.details || err?.message || err || '');
-  const low = msg.toLowerCase();
+  const parts = [
+    err?.shortMessage,
+    err?.details,
+    err?.cause?.message,
+    err?.message,
+    err,
+  ].filter(Boolean).map(String);
+  const msg = parts[0] || '';
+  const low = errorBlob(err).toLowerCase();
   if (low.includes('user rejected') || low.includes('user denied') || low.includes('rejected the request')) {
-    return 'Transaction cancelled in MetaMask.';
+    return 'Cancelled in MetaMask. Check the fox icon — approve the studionet switch first (chain 61999), then Confirm the Create transaction that locks the prize GEN.';
   }
   if (low.includes('insufficient') || low.includes('funds')) {
     return 'Not enough GEN for the prize plus gas.';
+  }
+  if (isRateLimitError(err)) {
+    const wait = getRetryAfterSeconds(err);
+    const mins = wait ? Math.max(1, Math.ceil(wait / 60)) : 10;
+    return `Studionet rate limit reached. Wait about ${mins} minute(s). Do not refresh or click Create. Close extra MatchGuard tabs, then retry once.`;
+  }
+  if (low.includes('failed to fetch') || low.includes('unknown rpc')) {
+    return 'Cannot reach Studionet RPC (Failed to fetch). Confirm MetaMask is on studionet (chain 61999), wait if you hit the hourly limit, then retry once.';
   }
   return msg || 'Write transaction failed.';
 };
@@ -97,16 +146,27 @@ const studionetChainIdHex = () => {
   return `0x${BigInt(id).toString(16)}`;
 };
 
+const sameChainId = (left, right) => {
+  try {
+    return BigInt(left).toString() === BigInt(right).toString();
+  } catch {
+    return String(left).toLowerCase() === String(right).toLowerCase();
+  }
+};
+
 export const switchToStudionet = async () => {
   if (typeof window === 'undefined' || !window.ethereum) return;
   const chainIdHex = studionetChainIdHex();
+  const current = await window.ethereum.request({ method: 'eth_chainId' });
+  if (sameChainId(current, chainIdHex)) return;
+
   try {
     await window.ethereum.request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: chainIdHex }],
     });
   } catch (switchError) {
-    if (switchError.code === 4902) {
+    if (Number(switchError.code) === 4902) {
       try {
         await window.ethereum.request({
           method: 'wallet_addEthereumChain',
@@ -118,14 +178,26 @@ export const switchToStudionet = async () => {
               symbol: 'GEN',
               decimals: 18,
             },
-            rpcUrls: studionet.rpcUrls?.default?.http || ['https://studio.genlayer.com/api'],
-            blockExplorerUrls: [studionet.blockExplorers?.default?.url || 'https://studio.genlayer.com'],
+            rpcUrls: studionet.rpcUrls?.default?.http || [STUDIONET_RPC],
+            blockExplorerUrls: [studionet.blockExplorers?.default?.url || EXPLORER_BASE],
           }],
         });
       } catch (addError) {
-        console.warn('Could not add studionet to MetaMask:', addError);
+        if (Number(addError.code) === 4001) {
+          throw new Error('You cancelled adding studionet in MetaMask. Approve the network, then retry.');
+        }
+        throw addError;
       }
+    } else if (Number(switchError.code) === 4001) {
+      throw new Error('You cancelled the studionet switch in MetaMask. Switch to chain 61999, then retry Create.');
+    } else {
+      throw switchError;
     }
+  }
+
+  const after = await window.ethereum.request({ method: 'eth_chainId' });
+  if (!sameChainId(after, chainIdHex)) {
+    throw new Error('MetaMask is not on studionet (chain 61999). Switch network, then retry Create.');
   }
 };
 
@@ -140,6 +212,7 @@ export const waitForTx = async (client, hash, { retries = 30, interval = 2000 } 
         interval,
       });
     } catch (err) {
+      if (isRateLimitError(err)) return hash;
       console.warn('waitForTransactionReceipt note:', err);
     }
   }
