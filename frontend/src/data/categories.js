@@ -54,6 +54,72 @@ export const EXAMPLE_REFERENCE_URLS = [
   'https://en.wikipedia.org/wiki/Esports',
 ];
 
+const MAX_URL_LEN = 256;
+const MAX_EVIDENCE_URLS = 3;
+const MAX_REFERENCE_URLS = 3;
+
+export function splitWikiHostPath(url) {
+  let cleaned = String(url || '').trim();
+  if (!cleaned) throw new Error('URL cannot be empty.');
+  const hash = cleaned.indexOf('#');
+  if (hash >= 0) cleaned = cleaned.slice(0, hash);
+  const q = cleaned.indexOf('?');
+  if (q >= 0) cleaned = cleaned.slice(0, q);
+  while (cleaned.endsWith('/')) cleaned = cleaned.slice(0, -1);
+  if (cleaned.length < 8 || cleaned.slice(0, 8).toLowerCase() !== 'https://') {
+    throw new Error('Only https:// Wikipedia URLs are allowed.');
+  }
+  const rest = cleaned.slice(8);
+  const slash = rest.indexOf('/');
+  let host = (slash >= 0 ? rest.slice(0, slash) : rest).toLowerCase();
+  const path = slash >= 0 ? `/${rest.slice(slash + 1)}` : '';
+  if (host.startsWith('www.')) host = host.slice(4);
+  if (host !== 'wikipedia.org' && !host.endsWith('.wikipedia.org')) {
+    throw new Error(`Source host is not Wikipedia: ${host}`);
+  }
+  if (path.length < 2) throw new Error('Wikipedia URL must include an article path.');
+  const normalized = `https://${host}${path}`;
+  if (normalized.length > MAX_URL_LEN) throw new Error('URL is too long.');
+  return { host, path, normalized };
+}
+
+export function validateChallengeUrls(evidenceUrls, referenceUrls) {
+  const evidence = (evidenceUrls || []).map((u) => String(u || '').trim()).filter(Boolean);
+  const refs = (referenceUrls || []).map((u) => String(u || '').trim()).filter(Boolean);
+  if (evidence.length < 1) throw new Error('Paste at least 1 Wikipedia evidence URL.');
+  if (evidence.length > MAX_EVIDENCE_URLS) throw new Error('At most 3 evidence URLs.');
+  if (refs.length < 2) throw new Error('Paste at least 2 distinct Wikipedia reference articles.');
+  if (refs.length > MAX_REFERENCE_URLS) throw new Error('At most 3 reference URLs.');
+
+  const evidenceNorm = [];
+  const evidenceKeys = [];
+  for (const u of evidence) {
+    const parsed = splitWikiHostPath(u);
+    if (evidenceKeys.some((k) => k.toLowerCase() === parsed.path.toLowerCase())) {
+      throw new Error('Duplicate evidence URL.');
+    }
+    evidenceNorm.push(parsed.normalized);
+    evidenceKeys.push(parsed.path);
+  }
+  const refNorm = [];
+  const refKeys = [];
+  for (const u of refs) {
+    const parsed = splitWikiHostPath(u);
+    if (refKeys.some((k) => k.toLowerCase() === parsed.path.toLowerCase())) {
+      throw new Error('Duplicate reference URL.');
+    }
+    if (evidenceKeys.some((k) => k.toLowerCase() === parsed.path.toLowerCase())) {
+      throw new Error('Reference URLs must be distinct from evidence URLs.');
+    }
+    refNorm.push(parsed.normalized);
+    refKeys.push(parsed.path);
+  }
+  if (refKeys[0].toLowerCase() === refKeys[1].toLowerCase()) {
+    throw new Error('The two reference URLs must be distinct Wikipedia articles.');
+  }
+  return { evidence: evidenceNorm, refs: refNorm };
+}
+
 export function unixNow() {
   return BigInt(Date.now()) / 1000n;
 }

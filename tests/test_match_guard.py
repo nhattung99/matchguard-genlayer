@@ -4,9 +4,9 @@ import pytest
 
 CONTRACT_PATH = "contracts/match_guard.py"
 
-EVIDENCE = "https://example.com/evidence/replay"
-REF1 = "https://official.example.com/standings"
-REF2 = "https://vod.example.com/stream"
+EVIDENCE = "https://en.wikipedia.org/wiki/Cheating_in_online_games"
+REF1 = "https://en.wikipedia.org/wiki/Valve_Anti-Cheat"
+REF2 = "https://en.wikipedia.org/wiki/Esports"
 FAR_FUTURE = 4102444800  # 2100-01-01
 PAST = 1
 SHORT_WINDOW = 1
@@ -325,9 +325,9 @@ def test_low_confidence_disputed_then_rechallenge(direct_vm, direct_deploy, dire
     assert row["settled"] is False
     assert row["confidence"] == 41
 
-    extra_ev = "https://example.com/evidence/clearer"
-    extra_r1 = "https://official.example.com/final"
-    extra_r2 = "https://vod.example.com/confirmed"
+    extra_ev = "https://en.wikipedia.org/wiki/Cheating_in_video_games"
+    extra_r1 = "https://en.wikipedia.org/wiki/Counter-Strike_2"
+    extra_r2 = "https://en.wikipedia.org/wiki/Fair_play"
     vm.sender = player_b
     contract.challenge_result(match_id, [extra_ev], [extra_r1, extra_r2])
     assert _match(contract, match_id)["status"] == "CHALLENGED"
@@ -638,3 +638,132 @@ def test_list_and_count(direct_vm, direct_deploy, direct_accounts):
     assert len(waiting) == 2
     assert waiting[0]["prize_amount"] == "100"
     assert waiting[1]["prize_amount"] == "200"
+
+
+def test_challenge_rejects_non_wikipedia_and_http(direct_vm, direct_deploy, direct_accounts):
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    match_id = _create(contract, vm, organizer, player_a, player_b)
+    _declare(contract, vm, player_a, match_id, "A")
+    vm.sender = player_b
+    with pytest.raises(Exception):
+        contract.challenge_result(
+            match_id,
+            ["https://www.hltv.org/"],
+            [REF1, REF2],
+        )
+    with pytest.raises(Exception):
+        contract.challenge_result(
+            match_id,
+            ["http://en.wikipedia.org/wiki/Cheating_in_online_games"],
+            [REF1, REF2],
+        )
+    assert _match(contract, match_id)["status"] == "RESULT_DECLARED"
+
+
+def test_challenge_rejects_duplicate_and_overlapping_sources(direct_vm, direct_deploy, direct_accounts):
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    match_id = _create(contract, vm, organizer, player_a, player_b)
+    _declare(contract, vm, player_a, match_id, "A")
+    vm.sender = player_b
+    with pytest.raises(Exception):
+        contract.challenge_result(match_id, [EVIDENCE], [REF1, REF1])
+    with pytest.raises(Exception):
+        contract.challenge_result(match_id, [REF1], [REF1, REF2])
+    assert _match(contract, match_id)["status"] == "RESULT_DECLARED"
+
+
+def test_timeout_recover_challenged_permissionless(direct_vm, direct_deploy, direct_accounts, monkeypatch):
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    outsider = direct_accounts[4]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    match_id = _create(contract, vm, organizer, player_a, player_b, prize=900, challenge_window=SHORT_WINDOW)
+    _declare(contract, vm, player_a, match_id, "A")
+    _challenge(contract, vm, player_b, match_id)
+
+    vm.sender = outsider
+    with pytest.raises(Exception):
+        contract.recover_unresolved_escrow(match_id)
+
+    challenged_at = int(_match(contract, match_id)["challenged_at"])
+    window = int(_match(contract, match_id)["challenge_window_seconds"])
+    _warp_now(monkeypatch, challenged_at + window + 1)
+    vm.sender = outsider
+    contract.recover_unresolved_escrow(match_id)
+
+    row = _match(contract, match_id)
+    assert row["status"] == "RESOLVED_TIMEOUT_REFUND"
+    assert row["verdict"] == "TIMEOUT_REFUND"
+    assert row["settled"] is True
+
+
+def test_timeout_recover_disputed_low_confidence(direct_vm, direct_deploy, direct_accounts, monkeypatch):
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    match_id = _create(contract, vm, organizer, player_a, player_b, prize=400, challenge_window=SHORT_WINDOW)
+    _declare(contract, vm, player_a, match_id, "A")
+    _challenge(contract, vm, player_b, match_id)
+    sim_installMocks(
+        vm,
+        web=_standard_web_no_cheat(),
+        llm={"verdict": "NO_CHEAT", "confidence": 22, "reason": "Not enough to settle"},
+    )
+    vm.sender = player_a
+    contract.resolve_challenge(match_id)
+    assert _match(contract, match_id)["status"] == "DISPUTED_LOW_CONFIDENCE"
+
+    challenged_at = int(_match(contract, match_id)["challenged_at"])
+    window = int(_match(contract, match_id)["challenge_window_seconds"])
+    _warp_now(monkeypatch, challenged_at + window + 1)
+    vm.sender = organizer
+    contract.recover_unresolved_escrow(match_id)
+    row = _match(contract, match_id)
+    assert row["status"] == "RESOLVED_TIMEOUT_REFUND"
+    assert row["settled"] is True
+
+
+def test_timeout_refund_transfer_fail_then_retry(direct_vm, direct_deploy, direct_accounts, monkeypatch):
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    match_id = _create(contract, vm, organizer, player_a, player_b, prize=650, challenge_window=SHORT_WINDOW)
+    _declare(contract, vm, player_a, match_id, "A")
+    _challenge(contract, vm, player_b, match_id)
+    challenged_at = int(_match(contract, match_id)["challenged_at"])
+    window = int(_match(contract, match_id)["challenge_window_seconds"])
+    _warp_now(monkeypatch, challenged_at + window + 1)
+
+    _failing_transfer(monkeypatch)
+    vm.sender = player_b
+    contract.recover_unresolved_escrow(match_id)
+    row = _match(contract, match_id)
+    assert row["status"] == "PAYOUT_FAILED"
+    assert row["verdict"] == "TIMEOUT_REFUND"
+    assert row["settled"] is False
+
+    monkeypatch.undo()
+    vm.sender = organizer
+    contract.retry_resolution(match_id)
+    row = _match(contract, match_id)
+    assert row["status"] == "RESOLVED_TIMEOUT_REFUND"
+    assert row["settled"] is True

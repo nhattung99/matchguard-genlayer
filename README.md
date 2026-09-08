@@ -11,8 +11,8 @@ https://matchguard-genlayer.vercel.app
 ## Deployed Contract
 
 - **Network:** studionet (GenLayer Studio hosted)
-- **Address:** `0x3c48A5Ed4F3263958A6761FA598635F9Ce435FFD`
-- **Explorer:** https://explorer-studio.genlayer.com/address/0x3c48A5Ed4F3263958A6761FA598635F9Ce435FFD
+- **Address:** `0xB53DDd9F969122c05A1BFF099f5a097FD3824Cbc`
+- **Explorer:** https://explorer-studio.genlayer.com/address/0xB53DDd9F969122c05A1BFF099f5a097FD3824Cbc
 
 ## How to try
 
@@ -21,10 +21,10 @@ https://matchguard-genlayer.vercel.app
 3. Fund that address with GEN from the GenLayer Studio **Accounts** panel. Do **not** use `testnet-faucet.genlayer.foundation` — that faucet credits Asimov/Bradbury, not studionet.
 4. Create a match. Pick category chips (FPS / MOBA / Fighting / Other), paste two player addresses, a prize chip, a result deadline, and a challenge window (6h / 12h / 24h / 48h, plus a 2-minute demo). Prize strings are parsed with `parseGenToWei` (no float).
 5. Share the `?match=<id>` link. A player or the organizer declares **A** or **B** before the deadline.
-6. The UI shows the challenge countdown. If it closes with no challenge, anyone can click **Claim prize**. If a player challenges, paste ≥1 evidence URL + ≥2 independent public URLs, then **Request AI adjudication**. Consensus is slower than a normal write — wait for the spinner.
-7. Read the verdict + `reason` + confidence. Open the tx on [Explorer](https://explorer-studio.genlayer.com/address/0x3c48A5Ed4F3263958A6761FA598635F9Ce435FFD). Confirm **GenVM Result: SUCCESS**, not only `FINALIZED`. Use two Wikipedia pages for a challenge — JS-heavy sites (HLTV, Twitter) make `web.render` fail.
+6. The UI shows the challenge countdown. If it closes with no challenge, anyone can click **Claim prize**. If a player challenges, paste 1 Wikipedia evidence article + 2 distinct Wikipedia reference articles, then **Request AI adjudication**. Consensus is slower than a normal write — wait for the spinner.
+7. Read the verdict + `reason` + confidence. Open the tx on [Explorer](https://explorer-studio.genlayer.com/address/0xB53DDd9F969122c05A1BFF099f5a097FD3824Cbc). Confirm **GenVM Result: SUCCESS**, not only `FINALIZED`. JS-heavy sites (HLTV, Twitter) are rejected on-chain. If AI stays in `CHALLENGED` or `DISPUTED_LOW_CONFIDENCE` past the timeout, anyone can call **Timeout refund to organizer**.
 
-**Expected outcome:** `AWAITING_RESULT` → `RESULT_DECLARED` → either `RESOLVED_UNCHALLENGED` (no challenge) or `CHALLENGED` → `RESOLVED_NO_CHEAT` / `RESOLVED_CHEAT_CONFIRMED`. Low confidence (`< 60`) becomes `DISPUTED_LOW_CONFIDENCE` so a player can re-challenge with new evidence (while the window is still open). Transfer failure becomes `PAYOUT_FAILED` with a retry that does **not** re-run AI. If nobody declares before the deadline, the organizer claims `EXPIRED_REFUNDED`.
+**Expected outcome:** `AWAITING_RESULT` → `RESULT_DECLARED` → either `RESOLVED_UNCHALLENGED` (no challenge) or `CHALLENGED` → `RESOLVED_NO_CHEAT` / `RESOLVED_CHEAT_CONFIRMED`. Low confidence (`< 60`) becomes `DISPUTED_LOW_CONFIDENCE` so a player can re-challenge with new evidence (while the window is still open). If AI never reaches a terminal verdict, permissionless `recover_unresolved_escrow` returns the prize to the organizer as `RESOLVED_TIMEOUT_REFUND`. Transfer failure becomes `PAYOUT_FAILED` with a retry that does **not** re-run AI. If nobody declares before the deadline, the organizer claims `EXPIRED_REFUNDED`.
 
 ---
 
@@ -40,15 +40,16 @@ https://matchguard-genlayer.vercel.app
 1. **Create match** — `create_match` (payable) + `gl.message.value` = prize. Status: `AWAITING_RESULT`.
 2. **Share** `?match=<id>` with both players.
 3. **Declare result** — player or organizer calls `declare_result` with `A` or `B` before `result_deadline`. Status: `RESULT_DECLARED`.
-4. **Challenge window** — a player may `challenge_result` with ≥1 evidence URL + ≥2 independent reference URLs.
+4. **Challenge window** — a player may `challenge_result` with 1–3 Wikipedia evidence URLs + 2–3 distinct Wikipedia reference articles (https only, unique article paths).
 5. **No challenge** — after the window, anyone calls `finalize_unchallenged_payout` → prize to declared winner → `RESOLVED_UNCHALLENGED`. No AI.
 6. **Challenge** — `resolve_challenge` runs `gl.vm.run_nondet`:
-   - Leader: `gl.nondet.web.render` every URL, `gl.nondet.exec_prompt`, parse JSON `{verdict, confidence, reason}`.
+   - Leader: `gl.nondet.web.render` every URL, isolate/truncate page text, `gl.nondet.exec_prompt`, parse JSON `{verdict, confidence, reason}`.
    - Validator: `my.verdict == leader.verdict` (absolute) and the same `confidence >= 60` branch.
 7. `confidence < 60` → `DISPUTED_LOW_CONFIDENCE` (re-challenge, no payout).
 8. `NO_CHEAT` → prize to declared winner → `RESOLVED_NO_CHEAT`. `CHEAT_CONFIRMED` → prize to the other player → `RESOLVED_CHEAT_CONFIRMED`.
-9. Transfer fail → `PAYOUT_FAILED`. `retry_resolution` reuses the stored verdict/declared winner and **does not re-run AI**.
-10. No result before deadline → organizer `claim_expired_refund` → `EXPIRED_REFUNDED`.
+9. If still `CHALLENGED` or `DISPUTED_LOW_CONFIDENCE` after `challenged_at + challenge_window_seconds`, anyone calls `recover_unresolved_escrow` → prize back to organizer → `RESOLVED_TIMEOUT_REFUND`.
+10. Transfer fail → `PAYOUT_FAILED`. `retry_resolution` reuses the stored verdict/declared winner and **does not re-run AI**.
+11. No result before deadline → organizer `claim_expired_refund` → `EXPIRED_REFUNDED`.
 
 ---
 
@@ -122,7 +123,7 @@ npm run test:money
 npm run check:float
 ```
 
-Coverage includes: unchallenged payout after the window, NO_CHEAT keeps the declared winner, CHEAT_CONFIRMED reverses the winner, expired refund, declare after deadline, challenge after window closed, missing URLs, low-confidence DISPUTED then re-challenge, web fail / broken JSON, double-declare / double-challenge / double-resolve, and real `emit_transfer` exceptions on unchallenged / NO_CHEAT / CHEAT_CONFIRMED / expired-refund → `PAYOUT_FAILED` → successful `retry_resolution`.
+Coverage includes: unchallenged payout after the window, NO_CHEAT keeps the declared winner, CHEAT_CONFIRMED reverses the winner, expired refund, declare after deadline, challenge after window closed, missing URLs, non-Wikipedia / duplicate / overlapping sources, low-confidence DISPUTED then re-challenge, web fail / broken JSON, double-declare / double-challenge / double-resolve, permissionless timeout refund for stuck CHALLENGED and DISPUTED_LOW_CONFIDENCE, and real `emit_transfer` exceptions on unchallenged / NO_CHEAT / CHEAT_CONFIRMED / expired-refund / timeout-refund → `PAYOUT_FAILED` → successful `retry_resolution`.
 
 ---
 

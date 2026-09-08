@@ -44,6 +44,7 @@ import {
   isValidAddress,
   EXAMPLE_EVIDENCE_URL,
   EXAMPLE_REFERENCE_URLS,
+  validateChallengeUrls,
 } from './data/categories.js';
 
 const shortAddr = (a) => {
@@ -332,9 +333,8 @@ export default function App() {
     try {
       const ev = cleanUrls(evidenceUrls);
       const refs = cleanUrls(refUrls);
-      if (ev.length < 1) throw new Error('Paste at least 1 evidence URL.');
-      if (refs.length < 2) throw new Error('Paste at least 2 independent reference URLs.');
-      await runWrite('challenge_result', [matchId, ev, refs]);
+      const checked = validateChallengeUrls(ev, refs);
+      await runWrite('challenge_result', [matchId, checked.evidence, checked.refs]);
       setEvidenceUrls(['']);
       setRefUrls(['', '']);
     } catch (err) {
@@ -372,6 +372,14 @@ export default function App() {
     }
   };
 
+  const handleRecover = async (matchId) => {
+    try {
+      await runWrite('recover_unresolved_escrow', [matchId]);
+    } catch (err) {
+      setErrorMessage(formatWriteError(err) || 'Timeout recovery failed');
+    }
+  };
+
   const handleRetry = async (matchId) => {
     try {
       await runWrite('retry_resolution', [matchId]);
@@ -384,7 +392,9 @@ export default function App() {
     <>
       <div className="field">
         <label className="label">Evidence URLs (min 1)</label>
-        <p className="hint">Paste public https:// links (replay, log, VOD). One click fills examples:</p>
+        <p className="hint">
+          Only https Wikipedia articles. GenVM cannot render HLTV, Twitter, or YouTube. One click fills examples:
+        </p>
         <button
           type="button"
           className="btn-secondary"
@@ -400,7 +410,7 @@ export default function App() {
           <div className="url-row" key={`e-${i}`}>
             <input
               className="input mono"
-              placeholder="https://replay-or-log..."
+              placeholder="https://en.wikipedia.org/wiki/…"
               value={u}
               onChange={(e) => {
                 const next = [...evidenceUrls];
@@ -437,7 +447,7 @@ export default function App() {
           <div className="url-row" key={`r-${i}`}>
             <input
               className="input mono"
-              placeholder="https://vod-or-standings..."
+              placeholder="https://en.wikipedia.org/wiki/…"
               value={u}
               onChange={(e) => {
                 const next = [...refUrls];
@@ -490,10 +500,15 @@ export default function App() {
     const declared = detail.declared_winner || row.declared_winner || '';
     const deadlineLeft = remainingUntil(detail.result_deadline || row.result_deadline);
     const declaredAt = BigInt(String(detail.result_declared_at || row.result_declared_at || '0').replace(/[^0-9]/g, '') || '0');
+    const challengedAt = BigInt(String(detail.challenged_at || row.challenged_at || '0').replace(/[^0-9]/g, '') || '0');
     const windowSec = BigInt(String(detail.challenge_window_seconds || row.challenge_window_seconds || '0').replace(/[^0-9]/g, '') || '0');
     const challengeEnd = declaredAt + windowSec;
     const challengeLeft = remainingUntil(challengeEnd.toString());
     const windowClosed = declaredAt > 0n && challengeLeft === 0n;
+    const recoverEnd = challengedAt + windowSec;
+    const recoverLeft = remainingUntil(recoverEnd.toString());
+    const recoverReady = challengedAt > 0n && recoverLeft === 0n;
+    const stuckAi = status === 'CHALLENGED' || status === 'DISPUTED_LOW_CONFIDENCE';
     const deadlinePassed = deadlineLeft === 0n;
 
     return (
@@ -526,6 +541,11 @@ export default function App() {
           {status === 'RESULT_DECLARED' && (
             <div className={`countdown ${windowClosed ? 'closed' : ''}`}>
               <Timer size={13} /> Challenge window: {windowClosed ? 'closed — prize can be claimed' : formatDuration(challengeLeft)}
+            </div>
+          )}
+          {stuckAi && challengedAt > 0n && (
+            <div className={`countdown ${recoverReady ? 'closed' : ''}`}>
+              <Timer size={13} /> Timeout refund: {recoverReady ? 'available — prize can return to organizer' : formatDuration(recoverLeft)}
             </div>
           )}
         </div>
@@ -596,9 +616,8 @@ export default function App() {
           {isOpen && status === 'CHALLENGED' && (
             <>
               <div className="warn-box">
-                Consensus can take several minutes. If Explorer shows GenVM ERROR on a failed URL
-                (HLTV, Twitter), this match stays CHALLENGED — start a new match and paste two
-                Wikipedia pages as references.
+                Use Wikipedia evidence only. Consensus can take several minutes. If GenVM ERROR,
+                wait for the timeout refund or start a new match with two distinct Wikipedia articles.
               </div>
               <button className="btn-ai" type="button" disabled={loading} onClick={() => handleResolve(row.match_id)}>
                 {resolvingId === row.match_id ? (
@@ -612,6 +631,12 @@ export default function App() {
                 )}
               </button>
             </>
+          )}
+
+          {isOpen && stuckAi && recoverReady && (
+            <button className="btn-danger full" type="button" disabled={loading} onClick={() => handleRecover(row.match_id)}>
+              Timeout refund to organizer
+            </button>
           )}
 
           {isOpen && status === 'PAYOUT_FAILED' && isParty && (
@@ -670,13 +695,8 @@ export default function App() {
           <li>Fund that same address with GEN from the GenLayer Studio <strong>Accounts</strong> panel. Do not use the public testnet faucet.</li>
           <li>Create a match: pick two player addresses, a category chip, a prize chip, a result deadline, and a challenge window. Share the <span className="mono">?match=</span> link.</li>
           <li>A player or the organizer declares A or B before the deadline. The challenge countdown starts.</li>
-          <li>If nobody challenges, anyone can click <strong>Claim prize</strong> after the window. If a player challenges, paste ≥1 evidence URL + ≥2 independent public URLs, then <strong>Request AI adjudication</strong>.</li>
-          <li>Read the on-chain <strong>verdict</strong> + <strong>reason</strong> + confidence, then open the transaction on{' '}
-            <a className="explorer-link" href={addressExplorerUrl(CONTRACT_ADDRESS)} target="_blank" rel="noreferrer">
-              Explorer <ExternalLink size={13} />
-            </a>
-            .
-          </li>
+          <li>If nobody challenges, anyone can click <strong>Claim prize</strong> after the window. If a player challenges, paste 1 Wikipedia evidence article + 2 different Wikipedia reference articles, then <strong>Request AI adjudication</strong>.</li>
+          <li>Read the on-chain <strong>verdict</strong> + <strong>reason</strong> + confidence. If AI stays stuck in CHALLENGED or low-confidence past the timeout, anyone can click <strong>Timeout refund to organizer</strong>. Confirm Explorer <strong>GenVM Result: SUCCESS</strong>, not only FINALIZED.</li>
         </ol>
       </section>
 
