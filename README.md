@@ -15,11 +15,17 @@ https://matchguard-genlayer.vercel.app
 - **Explorer:** https://explorer-studio.genlayer.com/address/0x96C3EeFd87855Df9765ABCA688946456c284c899
 - **Source on GitHub:** [`contracts/match_guard.py`](contracts/match_guard.py) — this file is the Studio deploy (allowlisted issuers + `_EoaRecipient` EOA payout). Constructor **SUCCESS** on 2026-09-13.
 
-### Live proof
+### Live proof (Match #1)
 
-Current contract: https://explorer-studio.genlayer.com/address/0x96C3EeFd87855Df9765ABCA688946456c284c899 (constructor GenVM **SUCCESS**). A full create → declare → challenge → `resolve_challenge` payout on this revision is the settlement evidence for resubmission.
+| Step | Method | GenVM | Tx |
+|---|---|---|---|
+| Create | `create_match` (1 GEN) | SUCCESS | https://explorer-studio.genlayer.com/tx/0x204ae640b34971e22f9f80609f9ab7396952b5d0934b7e8d0fa617c53050ca5e |
+| Declare | `declare_result` | SUCCESS | https://explorer-studio.genlayer.com/tx/0xc05f4c4e62e920efcbd716d3ddc55c33f725a97e0d9c1430baa5e8387ab27bf7 |
+| Challenge | `challenge_result` (allowlisted demo records) | SUCCESS | https://explorer-studio.genlayer.com/tx/0xcde2fea8fd18dc2d0c218faaa9b643df112efb31c120b9366f9773048c0300dc |
+| Adjudicate | `resolve_challenge` | SUCCESS | https://explorer-studio.genlayer.com/tx/0xf8f3d81fe0f5efea9722e923ceb327169e22c252abec665d0295430b0ce4b937 |
+| Payout | native **Send** 1 GEN to declared winner | FINALIZED (not an IC child ERROR) | https://explorer-studio.genlayer.com/tx/0x2706b80bb337f95e1dbf2b3711c039e888e7ab96e73e81fd8a89de2e4c1cc92c |
 
-Previous revision `0x9E436D9f8DB42C834FD906EBE9E95F48aB267571` reached `RESOLVED_NO_CHEAT` on Match #3, but paid with `get_contract_at(EOA).emit_transfer` (Studio child GenVM ERROR). This deploy uses `_EoaRecipient(Address).emit_transfer`. If a transfer still throws, status is `PAYOUT_FAILED`, `verdict` + `payout_recipient` stay stored, and permissionless `retry_resolution` pays without re-running AI.
+UI: `RESOLVED_NO_CHEAT` / `NO_CHEAT` / confidence 100 / `payout_recipient` = winner. Contract escrow is **0 GEN**. Payout uses `_EoaRecipient(Address).emit_transfer` (Explorer type `Send`). If a transfer still throws, status is `PAYOUT_FAILED`, `verdict` + `payout_recipient` stay stored, and permissionless `retry_resolution` pays without re-running AI.
 
 ## How to try
 
