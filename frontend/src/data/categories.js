@@ -47,75 +47,118 @@ export const DEADLINE_PRESETS = [
   { id: 'past', label: 'Already passed (refund demo)', offsetSec: '-60' },
 ];
 
-/** Wikipedia pages — GenVM web.render can fetch these. JS-heavy sites (HLTV, Twitter) fail. */
-export const EXAMPLE_EVIDENCE_URL = 'https://en.wikipedia.org/wiki/Cheating_in_online_games';
-export const EXAMPLE_REFERENCE_URLS = [
-  'https://en.wikipedia.org/wiki/Valve_Anti-Cheat',
-  'https://en.wikipedia.org/wiki/Esports',
+export const ATTESTATION_KINDS = [
+  { id: 'ANTI_CHEAT', label: 'Anti-cheat attestation' },
+  { id: 'PLATFORM_API', label: 'Tournament / platform API' },
+  { id: 'ORGANIZER', label: 'Organizer attestation (disclosed trust)' },
 ];
 
-const MAX_URL_LEN = 256;
+export const EXAMPLE_PLATFORM_MATCH_ID = 'FACEIT-CS2-88421';
+export const EXAMPLE_GAME_TITLE = 'Counter-Strike 2';
+export const EXAMPLE_PLAYER_A_TAG = 's1mple';
+export const EXAMPLE_PLAYER_B_TAG = 'device';
+export const EXAMPLE_REPLAY_HASH = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+export const RECORD_ORIGIN = 'https://matchguard-genlayer.vercel.app';
+const BLOCKED_HOST_SUFFIXES = ['wikipedia.org', 'wikimedia.org', 'mediawiki.org'];
+const RECORD_TOKENS = [
+  'match', 'room', 'replay', 'vod', 'anticheat', 'anti-cheat',
+  'bracket', 'result', 'report', 'records', 'vac',
+];
+
+export const recordUrl = (matchId, file) =>
+  `${RECORD_ORIGIN}/records/${matchId}/${file}`;
+
+export const exampleOfficialUrl = (matchId = EXAMPLE_PLATFORM_MATCH_ID) =>
+  recordUrl(matchId, 'official.html');
+export const exampleReplayUrl = (matchId = EXAMPLE_PLATFORM_MATCH_ID) =>
+  recordUrl(matchId, 'replay.html');
+export const EXAMPLE_EVIDENCE_URL = recordUrl(EXAMPLE_PLATFORM_MATCH_ID, 'anticheat.html');
+export const EXAMPLE_REFERENCE_URLS = [
+  recordUrl(EXAMPLE_PLATFORM_MATCH_ID, 'vac.html'),
+  recordUrl(EXAMPLE_PLATFORM_MATCH_ID, 'bracket.html'),
+];
+
+const MAX_URL_LEN = 400;
 const MAX_EVIDENCE_URLS = 3;
 const MAX_REFERENCE_URLS = 3;
 
-export function splitWikiHostPath(url) {
+export function parseHttpsUrl(url) {
   let cleaned = String(url || '').trim();
   if (!cleaned) throw new Error('URL cannot be empty.');
   const hash = cleaned.indexOf('#');
   if (hash >= 0) cleaned = cleaned.slice(0, hash);
-  const q = cleaned.indexOf('?');
-  if (q >= 0) cleaned = cleaned.slice(0, q);
-  while (cleaned.endsWith('/')) cleaned = cleaned.slice(0, -1);
+  if (cleaned.includes(' ')) throw new Error('URL cannot contain spaces.');
   if (cleaned.length < 8 || cleaned.slice(0, 8).toLowerCase() !== 'https://') {
-    throw new Error('Only https:// Wikipedia URLs are allowed.');
+    throw new Error('Only https:// URLs are allowed.');
   }
-  const rest = cleaned.slice(8);
-  const slash = rest.indexOf('/');
-  let host = (slash >= 0 ? rest.slice(0, slash) : rest).toLowerCase();
-  const path = slash >= 0 ? `/${rest.slice(slash + 1)}` : '';
-  if (host.startsWith('www.')) host = host.slice(4);
-  if (host !== 'wikipedia.org' && !host.endsWith('.wikipedia.org')) {
-    throw new Error(`Source host is not Wikipedia: ${host}`);
-  }
-  if (path.length < 2) throw new Error('Wikipedia URL must include an article path.');
-  const normalized = `https://${host}${path}`;
-  if (normalized.length > MAX_URL_LEN) throw new Error('URL is too long.');
-  return { host, path, normalized };
+  if (cleaned.length > MAX_URL_LEN) throw new Error('URL is too long.');
+  return cleaned;
 }
 
-export function validateChallengeUrls(evidenceUrls, referenceUrls) {
+function hostAndPath(url) {
+  const rest = url.slice(8);
+  const slash = rest.indexOf('/');
+  let host = (slash < 0 ? rest : rest.slice(0, slash)).toLowerCase();
+  let path = slash < 0 ? '' : rest.slice(slash + 1);
+  if (host.includes('?')) host = host.slice(0, host.indexOf('?'));
+  if (host.includes(':')) host = host.slice(0, host.indexOf(':'));
+  if (host.startsWith('www.')) host = host.slice(4);
+  if (path.includes('?')) path = path.slice(0, path.indexOf('?'));
+  return { host, path };
+}
+
+function hostBlocked(host) {
+  return BLOCKED_HOST_SUFFIXES.some((suf) => host === suf || host.endsWith(`.${suf}`));
+}
+
+export function assertUrlBound(url, platformMatchId) {
+  const norm = parseHttpsUrl(url);
+  const mid = String(platformMatchId || '').trim();
+  if (!mid) throw new Error('platform_match_id is required.');
+  const { host, path } = hostAndPath(norm);
+  if (hostBlocked(host)) {
+    throw new Error('Generic encyclopedia pages cannot establish a match result or cheat claim.');
+  }
+  if (!path.toLowerCase().includes(mid.toLowerCase())) {
+    throw new Error(`URL path must contain platform_match_id ${mid}; query-string binding is rejected.`);
+  }
+  if (!RECORD_TOKENS.some((tok) => path.toLowerCase().includes(tok))) {
+    throw new Error('URL must be a match-linked official, replay, bracket, or anti-cheat record.');
+  }
+  return norm;
+}
+
+export function validateChallengeUrls(evidenceUrls, referenceUrls, platformMatchId) {
   const evidence = (evidenceUrls || []).map((u) => String(u || '').trim()).filter(Boolean);
   const refs = (referenceUrls || []).map((u) => String(u || '').trim()).filter(Boolean);
-  if (evidence.length < 1) throw new Error('Paste at least 1 Wikipedia evidence URL.');
+  if (evidence.length < 1) throw new Error('Paste at least 1 match-bound evidence URL.');
   if (evidence.length > MAX_EVIDENCE_URLS) throw new Error('At most 3 evidence URLs.');
-  if (refs.length < 2) throw new Error('Paste at least 2 distinct Wikipedia reference articles.');
+  if (refs.length < 2) throw new Error('Paste at least 2 distinct match-bound reference URLs.');
   if (refs.length > MAX_REFERENCE_URLS) throw new Error('At most 3 reference URLs.');
 
   const evidenceNorm = [];
-  const evidenceKeys = [];
+  const keys = [];
   for (const u of evidence) {
-    const parsed = splitWikiHostPath(u);
-    if (evidenceKeys.some((k) => k.toLowerCase() === parsed.path.toLowerCase())) {
-      throw new Error('Duplicate evidence URL.');
-    }
-    evidenceNorm.push(parsed.normalized);
-    evidenceKeys.push(parsed.path);
+    const norm = assertUrlBound(u, platformMatchId);
+    const key = norm.toLowerCase();
+    if (keys.includes(key)) throw new Error('Duplicate evidence URL.');
+    evidenceNorm.push(norm);
+    keys.push(key);
   }
   const refNorm = [];
   const refKeys = [];
   for (const u of refs) {
-    const parsed = splitWikiHostPath(u);
-    if (refKeys.some((k) => k.toLowerCase() === parsed.path.toLowerCase())) {
-      throw new Error('Duplicate reference URL.');
+    const norm = assertUrlBound(u, platformMatchId);
+    const key = norm.toLowerCase();
+    if (refKeys.includes(key) || keys.includes(key)) {
+      throw new Error('Duplicate or overlapping reference URL.');
     }
-    if (evidenceKeys.some((k) => k.toLowerCase() === parsed.path.toLowerCase())) {
-      throw new Error('Reference URLs must be distinct from evidence URLs.');
-    }
-    refNorm.push(parsed.normalized);
-    refKeys.push(parsed.path);
+    refNorm.push(norm);
+    refKeys.push(key);
   }
-  if (refKeys[0].toLowerCase() === refKeys[1].toLowerCase()) {
-    throw new Error('The two reference URLs must be distinct Wikipedia articles.');
+  if (refKeys[0] === refKeys[1]) {
+    throw new Error('The two reference URLs must be distinct.');
   }
   return { evidence: evidenceNorm, refs: refNorm };
 }

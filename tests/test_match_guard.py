@@ -1,12 +1,24 @@
 import json
+import re
 import sys
 import pytest
 
 CONTRACT_PATH = "contracts/match_guard.py"
 
-EVIDENCE = "https://en.wikipedia.org/wiki/Cheating_in_online_games"
-REF1 = "https://en.wikipedia.org/wiki/Valve_Anti-Cheat"
-REF2 = "https://en.wikipedia.org/wiki/Esports"
+MID = "FACEIT-CS2-88421"
+GAME = "Counter-Strike 2"
+TAG_A = "s1mple"
+TAG_B = "device"
+PLAYED_AT = 1700000000
+REPLAY_HASH = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+OFFICIAL = "https://www.faceit.com/en/cs2/room/" + MID
+REPLAY = "https://www.faceit.com/en/cs2/room/" + MID + "/replay"
+EVIDENCE = "https://www.faceit.com/en/anticheat/reports/" + MID
+REF1 = "https://api.faceit.com/match/v2/match/" + MID
+REF2 = "https://www.faceit.com/en/cs2/bracket/" + MID
+WIKI_QUERY = "https://en.wikipedia.org/wiki/FACEIT?match=" + MID
+WIKI_PATH = "https://en.wikipedia.org/wiki/" + MID
+QUERY_ONLY = "https://www.faceit.com/en/cs2/room?match=" + MID
 FAR_FUTURE = 4102444800  # 2100-01-01
 PAST = 1
 SHORT_WINDOW = 1
@@ -96,35 +108,73 @@ def _create(
         description,
         result_deadline,
         challenge_window,
+        GAME,
+        MID,
+        TAG_A,
+        TAG_B,
+        PLAYED_AT,
+        REPLAY_HASH,
     )
     _clear_value(vm)
     return match_id
 
 
-def _declare(contract, vm, party, match_id, side="A"):
+def _declare(contract, vm, party, match_id, side="A", official=None, replay=None, replay_hash=None):
     vm.sender = party
-    contract.declare_result(match_id, side)
+    contract.declare_result(
+        match_id,
+        side,
+        official or OFFICIAL,
+        replay or REPLAY,
+        replay_hash if replay_hash is not None else REPLAY_HASH,
+    )
 
 
-def _challenge(contract, vm, player, match_id, evidence=None, refs=None):
+def _challenge(
+    contract,
+    vm,
+    player,
+    match_id,
+    evidence=None,
+    refs=None,
+    claimed_match_id=None,
+    claimed_tag=None,
+    kind="ANTI_CHEAT",
+):
     vm.sender = player
-    contract.challenge_result(match_id, evidence or [EVIDENCE], refs or [REF1, REF2])
+    contract.challenge_result(
+        match_id,
+        claimed_match_id or MID,
+        claimed_tag or TAG_A,
+        kind,
+        evidence or [EVIDENCE],
+        refs or [REF1, REF2],
+    )
+
+
+def _web_mocks(mapping):
+    # gltest treats mock keys as regex; escape '?' in ?match= so WebRender hits the mock.
+    return {re.escape(url): body for url, body in mapping.items()}
 
 
 def _standard_web_no_cheat():
-    return {
-        EVIDENCE: "Replay clip claims unusual flick shots",
-        REF1: "Official standings: match played clean, no VAC / anti-cheat flag",
-        REF2: "Public VOD: both players visible, no wallhack artifacts",
-    }
+    return _web_mocks({
+        OFFICIAL: "FACEIT match FACEIT-CS2-88421 official result: s1mple vs device, s1mple wins, no anti-cheat flag",
+        REPLAY: "VOD for FACEIT-CS2-88421: both players visible, no wallhack artifacts",
+        EVIDENCE: "Replay notes for FACEIT-CS2-88421: unusual flicks alleged, not confirmed",
+        REF1: "VAC record for FACEIT-CS2-88421 participants: no ban",
+        REF2: "Public listing FACEIT-CS2-88421: match played clean",
+    })
 
 
 def _standard_web_cheat():
-    return {
-        EVIDENCE: "Replay: declared winner tracking through walls for 40 seconds",
-        REF1: "Official anti-cheat report: account banned mid-match for wallhack",
-        REF2: "Public VOD overlay: aimbot pattern confirmed by two casters",
-    }
+    return _web_mocks({
+        OFFICIAL: "FACEIT-CS2-88421 anti-cheat: s1mple account banned mid-match for wallhack",
+        REPLAY: "VOD FACEIT-CS2-88421: declared winner tracking through walls for 40 seconds",
+        EVIDENCE: "Replay FACEIT-CS2-88421: wallhack pattern on s1mple",
+        REF1: "Official anti-cheat report FACEIT-CS2-88421: account banned for wallhack",
+        REF2: "Caster overlay FACEIT-CS2-88421: aimbot pattern confirmed",
+    })
 
 
 def _warp_now(monkeypatch, unix_ts):
@@ -261,7 +311,7 @@ def test_declare_after_deadline_blocked(direct_vm, direct_deploy, direct_account
     )
     vm.sender = player_a
     with pytest.raises(Exception):
-        contract.declare_result(match_id, "A")
+        contract.declare_result(match_id, "A", OFFICIAL, REPLAY, REPLAY_HASH)
     assert _match(contract, match_id)["status"] == "AWAITING_RESULT"
 
 
@@ -280,7 +330,7 @@ def test_challenge_after_window_closed_blocked(direct_vm, direct_deploy, direct_
 
     vm.sender = player_a
     with pytest.raises(Exception):
-        contract.challenge_result(match_id, [EVIDENCE], [REF1, REF2])
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [EVIDENCE], [REF1, REF2])
     assert _match(contract, match_id)["status"] == "RESULT_DECLARED"
 
 
@@ -295,9 +345,9 @@ def test_missing_reference_and_evidence_blocked(direct_vm, direct_deploy, direct
     _declare(contract, vm, player_a, match_id, "A")
     vm.sender = player_b
     with pytest.raises(Exception):
-        contract.challenge_result(match_id, [EVIDENCE], [REF1])
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [EVIDENCE], [REF1])
     with pytest.raises(Exception):
-        contract.challenge_result(match_id, [], [REF1, REF2])
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [], [REF1, REF2])
     assert _match(contract, match_id)["status"] == "RESULT_DECLARED"
 
 
@@ -325,29 +375,21 @@ def test_low_confidence_disputed_then_rechallenge(direct_vm, direct_deploy, dire
     assert row["settled"] is False
     assert row["confidence"] == 41
 
-    extra_ev = "https://en.wikipedia.org/wiki/Cheating_in_video_games"
-    extra_r1 = "https://en.wikipedia.org/wiki/Counter-Strike_2"
-    extra_r2 = "https://en.wikipedia.org/wiki/Fair_play"
     vm.sender = player_b
-    contract.challenge_result(match_id, [extra_ev], [extra_r1, extra_r2])
-    assert _match(contract, match_id)["status"] == "CHALLENGED"
-
-    sim_installMocks(
-        vm,
-        web={
-            extra_ev: "Clear anti-cheat log: no flags",
-            extra_r1: "Official: match stands",
-            extra_r2: "VOD: no wallhack artifacts",
-        },
-        llm={"verdict": "NO_CHEAT", "confidence": 88, "reason": "Updated independent sources confirm no cheat"},
-    )
-    vm.sender = player_a
-    contract.resolve_challenge(match_id)
-
-    row = _match(contract, match_id)
-    assert row["status"] == "RESOLVED_NO_CHEAT"
-    assert row["verdict"] == "NO_CHEAT"
-    assert row["settled"] is True
+    with pytest.raises(Exception):
+        contract.challenge_result(
+            match_id,
+            MID,
+            TAG_A,
+            "ANTI_CHEAT",
+            ["https://www.faceit.com/en/anticheat/reports/" + MID + "/extra"],
+            [
+                "https://api.faceit.com/match/v2/match/" + MID + "/alt",
+                "https://www.faceit.com/en/cs2/bracket/" + MID + "/alt",
+            ],
+        )
+    assert _match(contract, match_id)["status"] == "DISPUTED_LOW_CONFIDENCE"
+    assert _match(contract, match_id)["evidence_frozen"] is True
 
 
 def test_web_fail_and_invalid_json(direct_vm, direct_deploy, direct_accounts):
@@ -391,12 +433,12 @@ def test_double_declare_challenge_finalize_resolve_blocked(direct_vm, direct_dep
     _declare(contract, vm, player_a, match_id, "A")
     vm.sender = player_b
     with pytest.raises(Exception):
-        contract.declare_result(match_id, "B")
+        contract.declare_result(match_id, "B", OFFICIAL, REPLAY, REPLAY_HASH)
 
     _challenge(contract, vm, player_b, match_id)
     vm.sender = player_a
     with pytest.raises(Exception):
-        contract.challenge_result(match_id, [EVIDENCE], [REF1, REF2])
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [EVIDENCE], [REF1, REF2])
 
     vm.sender = outsider
     with pytest.raises(Exception):
@@ -424,13 +466,19 @@ def test_same_players_and_zero_prize_blocked(direct_vm, direct_deploy, direct_ac
     vm.sender = organizer
     _set_value(vm, 1000)
     with pytest.raises(Exception):
-        contract.create_match(player_a, player_a, "same players", FAR_FUTURE, LONG_WINDOW)
+        contract.create_match(
+            player_a, player_a, "same players", FAR_FUTURE, LONG_WINDOW,
+            GAME, MID, TAG_A, TAG_B, PLAYED_AT, REPLAY_HASH,
+        )
     _clear_value(vm)
 
     vm.sender = organizer
     _set_value(vm, 0)
     with pytest.raises(Exception):
-        contract.create_match(direct_accounts[2], direct_accounts[3], "empty prize", FAR_FUTURE, LONG_WINDOW)
+        contract.create_match(
+            direct_accounts[2], direct_accounts[3], "empty prize", FAR_FUTURE, LONG_WINDOW,
+            GAME, MID, TAG_A, TAG_B, PLAYED_AT, REPLAY_HASH,
+        )
     _clear_value(vm)
 
 
@@ -445,12 +493,12 @@ def test_outsider_cannot_challenge_or_declare(direct_vm, direct_deploy, direct_a
     match_id = _create(contract, vm, organizer, player_a, player_b)
     vm.sender = outsider
     with pytest.raises(Exception):
-        contract.declare_result(match_id, "A")
+        contract.declare_result(match_id, "A", OFFICIAL, REPLAY, REPLAY_HASH)
 
     _declare(contract, vm, player_a, match_id, "A")
     vm.sender = outsider
     with pytest.raises(Exception):
-        contract.challenge_result(match_id, [EVIDENCE], [REF1, REF2])
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [EVIDENCE], [REF1, REF2])
 
 
 def test_expired_refund_before_deadline_blocked(direct_vm, direct_deploy, direct_accounts):
@@ -640,7 +688,7 @@ def test_list_and_count(direct_vm, direct_deploy, direct_accounts):
     assert waiting[1]["prize_amount"] == "200"
 
 
-def test_challenge_rejects_non_wikipedia_and_http(direct_vm, direct_deploy, direct_accounts):
+def test_challenge_rejects_http_unbound_and_hltv(direct_vm, direct_deploy, direct_accounts):
     organizer = direct_accounts[1]
     player_a = direct_accounts[2]
     player_b = direct_accounts[3]
@@ -653,13 +701,19 @@ def test_challenge_rejects_non_wikipedia_and_http(direct_vm, direct_deploy, dire
     with pytest.raises(Exception):
         contract.challenge_result(
             match_id,
-            ["https://www.hltv.org/"],
+            MID,
+            TAG_A,
+            "ANTI_CHEAT",
+            ["https://www.hltv.org/matches/237000"],
             [REF1, REF2],
         )
     with pytest.raises(Exception):
         contract.challenge_result(
             match_id,
-            ["http://en.wikipedia.org/wiki/Cheating_in_online_games"],
+            MID,
+            TAG_A,
+            "ANTI_CHEAT",
+            [WIKI_QUERY],
             [REF1, REF2],
         )
     assert _match(contract, match_id)["status"] == "RESULT_DECLARED"
@@ -676,9 +730,11 @@ def test_challenge_rejects_duplicate_and_overlapping_sources(direct_vm, direct_d
     _declare(contract, vm, player_a, match_id, "A")
     vm.sender = player_b
     with pytest.raises(Exception):
-        contract.challenge_result(match_id, [EVIDENCE], [REF1, REF1])
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [EVIDENCE], [REF1, REF1])
     with pytest.raises(Exception):
-        contract.challenge_result(match_id, [REF1], [REF1, REF2])
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [REF1], [REF1, REF2])
+    with pytest.raises(Exception):
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [OFFICIAL], [REF1, REF2])
     assert _match(contract, match_id)["status"] == "RESULT_DECLARED"
 
 
@@ -767,3 +823,80 @@ def test_timeout_refund_transfer_fail_then_retry(direct_vm, direct_deploy, direc
     row = _match(contract, match_id)
     assert row["status"] == "RESOLVED_TIMEOUT_REFUND"
     assert row["settled"] is True
+
+
+def test_mismatch_match_id_and_participant_blocked(direct_vm, direct_deploy, direct_accounts):
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    match_id = _create(contract, vm, organizer, player_a, player_b)
+    _declare(contract, vm, player_a, match_id, "A")
+    vm.sender = player_b
+    with pytest.raises(Exception):
+        _challenge(contract, vm, player_b, match_id, claimed_match_id="OTHER-MATCH-1")
+    with pytest.raises(Exception):
+        _challenge(contract, vm, player_b, match_id, claimed_tag="notAPlayer")
+    assert _match(contract, match_id)["status"] == "RESULT_DECLARED"
+
+
+def test_altered_hash_and_unbound_official_url_blocked(direct_vm, direct_deploy, direct_accounts):
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    match_id = _create(contract, vm, organizer, player_a, player_b)
+    vm.sender = player_a
+    with pytest.raises(Exception):
+        contract.declare_result(
+            match_id,
+            "A",
+            WIKI_QUERY,
+            REPLAY,
+            REPLAY_HASH,
+        )
+    with pytest.raises(Exception):
+        contract.declare_result(
+            match_id,
+            "A",
+            OFFICIAL,
+            REPLAY,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+    assert _match(contract, match_id)["status"] == "AWAITING_RESULT"
+
+
+def test_wikipedia_and_query_only_binding_rejected(direct_vm, direct_deploy, direct_accounts):
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    match_id = _create(contract, vm, organizer, player_a, player_b)
+    vm.sender = player_a
+    with pytest.raises(Exception):
+        contract.declare_result(match_id, "A", WIKI_QUERY, REPLAY, REPLAY_HASH)
+    with pytest.raises(Exception):
+        contract.declare_result(match_id, "A", WIKI_PATH, REPLAY, REPLAY_HASH)
+    with pytest.raises(Exception):
+        contract.declare_result(match_id, "A", QUERY_ONLY, REPLAY, REPLAY_HASH)
+    _declare(contract, vm, player_a, match_id, "A")
+    vm.sender = player_b
+    with pytest.raises(Exception):
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [WIKI_QUERY], [REF1, REF2])
+    with pytest.raises(Exception):
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [WIKI_PATH], [REF1, REF2])
+    with pytest.raises(Exception):
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [QUERY_ONLY], [REF1, REF2])
+    row = _match(contract, match_id)
+    assert row["status"] == "RESULT_DECLARED"
+    assert row["platform_match_id"] == MID
+    assert row["player_a_tag"] == TAG_A
+    assert row["game_title"] == GAME
+    assert row["official_result_url"] == OFFICIAL
+    assert row["replay_content_hash"] == REPLAY_HASH

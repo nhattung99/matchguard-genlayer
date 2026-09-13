@@ -5,8 +5,8 @@ Deploy from GenLayer Studio **Run & Debug**. Confirm **GenVM Result: SUCCESS**, 
 | Field | Value |
 |---|---|
 | Network | studionet |
-| Address | `0xB53DDd9F969122c05A1BFF099f5a097FD3824Cbc` |
-| Explorer | https://explorer-studio.genlayer.com/address/0xB53DDd9F969122c05A1BFF099f5a097FD3824Cbc |
+| Address | `0x9E436D9f8DB42C834FD906EBE9E95F48aB267571` |
+| Explorer | https://explorer-studio.genlayer.com/address/0x9E436D9f8DB42C834FD906EBE9E95F48aB267571 |
 
 `create_match` must be `@gl.public.write.payable`. A non-payable write that sends GEN fails with:
 

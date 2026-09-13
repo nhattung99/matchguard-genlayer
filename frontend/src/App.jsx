@@ -38,12 +38,20 @@ import {
   PRIZE_PRESETS,
   CHALLENGE_WINDOW_PRESETS,
   DEADLINE_PRESETS,
+  ATTESTATION_KINDS,
   deadlineUnixFromOffset,
   remainingUntil,
   formatDuration,
   isValidAddress,
-  EXAMPLE_EVIDENCE_URL,
-  EXAMPLE_REFERENCE_URLS,
+  unixNow,
+  EXAMPLE_PLATFORM_MATCH_ID,
+  EXAMPLE_GAME_TITLE,
+  EXAMPLE_PLAYER_A_TAG,
+  EXAMPLE_PLAYER_B_TAG,
+  EXAMPLE_REPLAY_HASH,
+  recordUrl,
+  exampleOfficialUrl,
+  exampleReplayUrl,
   validateChallengeUrls,
 } from './data/categories.js';
 
@@ -91,6 +99,19 @@ export default function App() {
   const [amountStr, setAmountStr] = useState('1');
   const [deadlinePresetId, setDeadlinePresetId] = useState('1d');
   const [windowPresetId, setWindowPresetId] = useState('24h');
+  const [gameTitle, setGameTitle] = useState(EXAMPLE_GAME_TITLE);
+  const [platformMatchId, setPlatformMatchId] = useState(EXAMPLE_PLATFORM_MATCH_ID);
+  const [playerATag, setPlayerATag] = useState(EXAMPLE_PLAYER_A_TAG);
+  const [playerBTag, setPlayerBTag] = useState(EXAMPLE_PLAYER_B_TAG);
+  const [matchPlayedAt, setMatchPlayedAt] = useState(() => String(unixNow() - 3600n));
+  const [replayHash, setReplayHash] = useState(EXAMPLE_REPLAY_HASH);
+
+  const [officialResultUrl, setOfficialResultUrl] = useState('');
+  const [replayOrVodUrl, setReplayOrVodUrl] = useState('');
+  const [declareHash, setDeclareHash] = useState('');
+  const [claimedMatchId, setClaimedMatchId] = useState('');
+  const [claimedPlayerTag, setClaimedPlayerTag] = useState('');
+  const [attestationKind, setAttestationKind] = useState('ANTI_CHEAT');
 
   const [evidenceUrls, setEvidenceUrls] = useState(['']);
   const [refUrls, setRefUrls] = useState(['', '']);
@@ -264,10 +285,21 @@ export default function App() {
           `AI transaction finalized but GenVM rolled back — match is still CHALLENGED. ` +
           `Open Explorer: ${txExplorerUrl(hash)}. ` +
           `Usual cause: web.render failed on a JS-heavy URL (HLTV, Twitter). ` +
-          `Create a new match and challenge with two Wikipedia pages.`
+          `Create a new match and challenge with match-linked official/replay/anti-cheat records (path must contain the platform match ID). Wikipedia is rejected.`
         );
       }
-      if (receiptLooksFailed(receipt)) {
+      const status = String(row?.status || '');
+      const settledOk = row && (row.settled === true || status.startsWith('RESOLVED_') || status === 'EXPIRED_REFUNDED');
+      const okByState =
+        settledOk ||
+        (fnName === 'declare_result' && status === 'RESULT_DECLARED') ||
+        (fnName === 'challenge_result' && status === 'CHALLENGED') ||
+        (fnName === 'resolve_challenge' && (status.startsWith('RESOLVED_') || status === 'DISPUTED_LOW_CONFIDENCE' || status === 'PAYOUT_FAILED')) ||
+        (fnName === 'finalize_unchallenged_payout' && (status === 'RESOLVED_UNCHALLENGED' || status === 'PAYOUT_FAILED')) ||
+        (fnName === 'recover_unresolved_escrow' && (status === 'RESOLVED_TIMEOUT_REFUND' || status === 'PAYOUT_FAILED')) ||
+        (fnName === 'retry_resolution' && settledOk) ||
+        (fnName === 'claim_expired_refund' && (status === 'EXPIRED_REFUNDED' || status === 'PAYOUT_FAILED'));
+      if (receiptLooksFailed(receipt) && !okByState) {
         throw new Error(
           `Transaction finalized with a GenVM error. Check Explorer: ${txExplorerUrl(hash)}`
         );
@@ -303,6 +335,17 @@ export default function App() {
       const wei = parseGenToWei(amountStr);
       if (wei <= 0n) throw new Error('Prize must be greater than 0 GEN.');
       if (!description.trim()) throw new Error('Description cannot be empty.');
+      if (!gameTitle.trim()) throw new Error('Game title is required.');
+      if (!platformMatchId.trim()) throw new Error('Platform match ID is required.');
+      if (!playerATag.trim() || !playerBTag.trim()) throw new Error('Both player tags are required.');
+      if (playerATag.trim().toLowerCase() === playerBTag.trim().toLowerCase()) {
+        throw new Error('Player tags must be different.');
+      }
+      const playedAt = BigInt(String(matchPlayedAt || '').replace(/[^0-9]/g, '') || '0');
+      if (playedAt <= 0n) throw new Error('match_played_at must be a unix timestamp.');
+      if (!/^[0-9a-f]{64}$/.test(replayHash.trim().toLowerCase())) {
+        throw new Error('replay_content_hash must be 64 hex characters (integrity only).');
+      }
       if (!isValidAddress(playerA) || !isValidAddress(playerB)) {
         throw new Error('Player A and Player B must be valid 0x addresses.');
       }
@@ -310,7 +353,19 @@ export default function App() {
       const windowSec = BigInt(windowPreset.seconds);
       await runWrite(
         'create_match',
-        [playerA.trim(), playerB.trim(), description.trim(), deadlineUnix, windowSec],
+        [
+          playerA.trim(),
+          playerB.trim(),
+          description.trim(),
+          deadlineUnix,
+          windowSec,
+          gameTitle.trim(),
+          platformMatchId.trim(),
+          playerATag.trim(),
+          playerBTag.trim(),
+          playedAt,
+          replayHash.trim().toLowerCase(),
+        ],
         wei
       );
       setTab('list');
@@ -323,7 +378,12 @@ export default function App() {
 
   const handleDeclare = async (matchId, side) => {
     try {
-      await runWrite('declare_result', [matchId, side]);
+      const row = details[matchId] || {};
+      const mid = String(row.platform_match_id || platformMatchId || '').trim();
+      const official = officialResultUrl.trim() || exampleOfficialUrl(mid);
+      const replay = replayOrVodUrl.trim() || exampleReplayUrl(mid);
+      const hash = (declareHash.trim() || row.replay_content_hash || replayHash || '').toLowerCase();
+      await runWrite('declare_result', [matchId, side, official, replay, hash]);
     } catch (err) {
       setErrorMessage(formatWriteError(err) || 'Declare result failed');
     }
@@ -331,10 +391,13 @@ export default function App() {
 
   const handleChallenge = async (matchId) => {
     try {
+      const row = details[matchId] || {};
+      const mid = String(claimedMatchId || row.platform_match_id || '').trim();
+      const tag = String(claimedPlayerTag || row.player_a_tag || '').trim();
       const ev = cleanUrls(evidenceUrls);
       const refs = cleanUrls(refUrls);
-      const checked = validateChallengeUrls(ev, refs);
-      await runWrite('challenge_result', [matchId, checked.evidence, checked.refs]);
+      const checked = validateChallengeUrls(ev, refs, mid);
+      await runWrite('challenge_result', [matchId, mid, tag, attestationKind, checked.evidence, checked.refs]);
       setEvidenceUrls(['']);
       setRefUrls(['', '']);
     } catch (err) {
@@ -388,29 +451,45 @@ export default function App() {
     }
   };
 
-  const renderUrlEditor = () => (
+  const fillBoundChallengeUrls = (mid) => {
+    const id = String(mid || EXAMPLE_PLATFORM_MATCH_ID).trim() || EXAMPLE_PLATFORM_MATCH_ID;
+    setEvidenceUrls([recordUrl(id, 'anticheat.html')]);
+    setRefUrls([recordUrl(id, 'vac.html'), recordUrl(id, 'bracket.html')]);
+  };
+
+  const openMatchActions = (row) => {
+    const opening = activeMatchId !== row.match_id;
+    setActiveMatchId(opening ? row.match_id : '');
+    fetchDetail(row.match_id);
+    if (!opening) return;
+    const mid = String(row.platform_match_id || EXAMPLE_PLATFORM_MATCH_ID).trim();
+    setOfficialResultUrl(row.official_result_url || exampleOfficialUrl(mid));
+    setReplayOrVodUrl(row.replay_or_vod_url || exampleReplayUrl(mid));
+    setDeclareHash(row.replay_content_hash || replayHash || EXAMPLE_REPLAY_HASH);
+    setClaimedMatchId(mid);
+    setClaimedPlayerTag(row.player_a_tag || EXAMPLE_PLAYER_A_TAG);
+  };
+
+  const renderUrlEditor = (platformId) => (
     <>
       <div className="field">
-        <label className="label">Evidence URLs (min 1)</label>
+        <label className="label">Evidence URLs (min 1, bound to this match)</label>
         <p className="hint">
-          Only https Wikipedia articles. GenVM cannot render HLTV, Twitter, or YouTube. One click fills examples:
+          HTTPS official / replay / anti-cheat / bracket records only. The URL <strong>path</strong> must contain this platform match ID. Wikipedia and query-string <span className="mono">?match=</span> binding are rejected. Demo records (GenVM can fetch):
         </p>
         <button
           type="button"
           className="btn-secondary"
           style={{ marginBottom: '0.55rem' }}
-          onClick={() => {
-            setEvidenceUrls([EXAMPLE_EVIDENCE_URL]);
-            setRefUrls([...EXAMPLE_REFERENCE_URLS]);
-          }}
+          onClick={() => fillBoundChallengeUrls(platformId)}
         >
-          Fill example Wikipedia URLs (GenVM can fetch these)
+          Fill match-linked demo records
         </button>
         {evidenceUrls.map((u, i) => (
           <div className="url-row" key={`e-${i}`}>
             <input
               className="input mono"
-              placeholder="https://en.wikipedia.org/wiki/…"
+              placeholder={`https://…/records/${platformId || 'PLATFORM-ID'}/anticheat.html`}
               value={u}
               onChange={(e) => {
                 const next = [...evidenceUrls];
@@ -442,12 +521,12 @@ export default function App() {
         </button>
       </div>
       <div className="field">
-        <label className="label">Independent reference URLs (min 2)</label>
+        <label className="label">Independent reference URLs (min 2, same match)</label>
         {refUrls.map((u, i) => (
           <div className="url-row" key={`r-${i}`}>
             <input
               className="input mono"
-              placeholder="https://en.wikipedia.org/wiki/…"
+              placeholder={`https://…/records/${platformId || 'PLATFORM-ID'}/anticheat.html`}
               value={u}
               onChange={(e) => {
                 const next = [...refUrls];
@@ -521,18 +600,28 @@ export default function App() {
           <span className={statusClass(status)}>{status}</span>
         </div>
         <p className="desc">{(detail.description || row.description || '').slice(0, 220)}</p>
+        <div className="stack meta">
+          <div>{detail.game_title || row.game_title || '—'} · <span className="mono">{detail.platform_match_id || row.platform_match_id || '—'}</span></div>
+        </div>
         <div className="sides">
           <div className={`side ${declared === 'A' ? 'mine' : ''}`}>
-            <span>Side A {declared === 'A' ? '· declared winner' : ''}</span>
+            <span>Side A {declared === 'A' ? '· declared winner' : ''} · {detail.player_a_tag || row.player_a_tag || '—'}</span>
             <b className="mono">{shortAddr(pA)}</b>
           </div>
           <div className={`side ${declared === 'B' ? 'mine' : ''}`}>
-            <span>Side B {declared === 'B' ? '· declared winner' : ''}</span>
+            <span>Side B {declared === 'B' ? '· declared winner' : ''} · {detail.player_b_tag || row.player_b_tag || '—'}</span>
             <b className="mono">{shortAddr(pB)}</b>
           </div>
         </div>
         <div className="stack meta">
           <div>Organizer: <span className="mono">{shortAddr(organizer)}</span></div>
+          {(detail.replay_content_hash || row.replay_content_hash) && (
+            <div>Replay hash (integrity only): <span className="mono">{String(detail.replay_content_hash || row.replay_content_hash).slice(0, 16)}…</span></div>
+          )}
+          {(detail.attestation_kind || row.attestation_kind) && (
+            <div>Attestation: {detail.attestation_kind || row.attestation_kind} · accused {detail.accused_player_tag || row.accused_player_tag || '—'}</div>
+          )}
+          {(detail.evidence_frozen || row.evidence_frozen) && <div>Evidence frozen — cannot replace after adjudication starts.</div>}
           {status === 'AWAITING_RESULT' && (
             <div className="countdown">
               <Timer size={13} /> Result deadline: {deadlinePassed ? 'passed' : formatDuration(deadlineLeft)}
@@ -564,10 +653,7 @@ export default function App() {
           <button
             className="btn-ghost full"
             type="button"
-            onClick={() => {
-              setActiveMatchId(isOpen ? '' : row.match_id);
-              fetchDetail(row.match_id);
-            }}
+            onClick={() => openMatchActions(row)}
           >
             {isOpen ? 'Hide actions' : 'Open actions'}
           </button>
@@ -579,14 +665,43 @@ export default function App() {
           )}
 
           {isOpen && status === 'AWAITING_RESULT' && isParty && !deadlinePassed && (
-            <div className="two-col">
-              <button className="btn-primary full" type="button" disabled={loading} onClick={() => handleDeclare(row.match_id, 'A')}>
-                Declare A wins
-              </button>
-              <button className="btn-primary full" type="button" disabled={loading} onClick={() => handleDeclare(row.match_id, 'B')}>
-                Declare B wins
-              </button>
-            </div>
+            <>
+              <div className="field">
+                <label className="label">Official result URL (https, must contain platform match ID)</label>
+                <input
+                  className="input mono"
+                  value={officialResultUrl}
+                  onChange={(e) => setOfficialResultUrl(e.target.value)}
+                  placeholder={exampleOfficialUrl(detail.platform_match_id || row.platform_match_id)}
+                />
+              </div>
+              <div className="field">
+                <label className="label">Replay / VOD URL (https, same match, distinct from official)</label>
+                <input
+                  className="input mono"
+                  value={replayOrVodUrl}
+                  onChange={(e) => setReplayOrVodUrl(e.target.value)}
+                  placeholder={exampleReplayUrl(detail.platform_match_id || row.platform_match_id)}
+                />
+              </div>
+              <div className="field">
+                <label className="label">Replay content hash (64 hex, integrity only — not proof of cheat)</label>
+                <input
+                  className="input mono"
+                  value={declareHash}
+                  onChange={(e) => setDeclareHash(e.target.value.trim().toLowerCase())}
+                  placeholder={EXAMPLE_REPLAY_HASH}
+                />
+              </div>
+              <div className="two-col">
+                <button className="btn-primary full" type="button" disabled={loading} onClick={() => handleDeclare(row.match_id, 'A')}>
+                  Declare A wins
+                </button>
+                <button className="btn-primary full" type="button" disabled={loading} onClick={() => handleDeclare(row.match_id, 'B')}>
+                  Declare B wins
+                </button>
+              </div>
+            </>
           )}
 
           {isOpen && status === 'AWAITING_RESULT' && isOrganizer && deadlinePassed && (
@@ -595,16 +710,56 @@ export default function App() {
             </button>
           )}
 
-          {isOpen && (status === 'RESULT_DECLARED' || status === 'DISPUTED_LOW_CONFIDENCE') && isPlayer && !windowClosed && (
+          {isOpen && status === 'RESULT_DECLARED' && isPlayer && !windowClosed && (
             <>
-              {status === 'DISPUTED_LOW_CONFIDENCE' && (
-                <div className="warn-box">Low confidence. Submit new evidence, then request AI adjudication again.</div>
+              <div className="field">
+                <label className="label">Claimed platform match ID</label>
+                <input
+                  className="input mono"
+                  value={claimedMatchId}
+                  onChange={(e) => setClaimedMatchId(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label className="label">Accused player tag (must be a participant)</label>
+                <input
+                  className="input mono"
+                  value={claimedPlayerTag}
+                  onChange={(e) => setClaimedPlayerTag(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label className="label">Attestation authority</label>
+                <div className="chips">
+                  {ATTESTATION_KINDS.map((k) => (
+                    <button
+                      key={k.id}
+                      type="button"
+                      className={`chip ${attestationKind === k.id ? 'active' : ''}`}
+                      onClick={() => setAttestationKind(k.id)}
+                    >
+                      {k.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {attestationKind === 'ORGANIZER' && (
+                <div className="warn-box">
+                  Organizer attestation is a disclosed trust assumption, not a cryptographic authority.
+                  The opposing player files this challenge as the response path. Replay/VOD hash is integrity evidence only — not proof of cheat.
+                </div>
               )}
-              {renderUrlEditor()}
+              {renderUrlEditor(detail.platform_match_id || row.platform_match_id)}
               <button className="btn-secondary full" type="button" disabled={loading} onClick={() => handleChallenge(row.match_id)}>
                 <Swords size={15} /> File cheat challenge
               </button>
             </>
+          )}
+
+          {isOpen && status === 'DISPUTED_LOW_CONFIDENCE' && (
+            <div className="warn-box">
+              Low-confidence verdict. Evidence is frozen and cannot be replaced. Wait for the timeout refund or keep the disputed status.
+            </div>
           )}
 
           {isOpen && status === 'RESULT_DECLARED' && windowClosed && (
@@ -616,8 +771,8 @@ export default function App() {
           {isOpen && status === 'CHALLENGED' && (
             <>
               <div className="warn-box">
-                Use Wikipedia evidence only. Consensus can take several minutes. If GenVM ERROR,
-                wait for the timeout refund or start a new match with two distinct Wikipedia articles.
+                Evidence is frozen. Consensus can take several minutes. If GenVM ERROR,
+                wait for the timeout refund or start a new match with match-linked official/replay/anti-cheat records.
               </div>
               <button className="btn-ai" type="button" disabled={loading} onClick={() => handleResolve(row.match_id)}>
                 {resolvingId === row.match_id ? (
@@ -693,10 +848,10 @@ export default function App() {
         <ol>
           <li>Install MetaMask. Click <strong>Connect wallet</strong> — the app switches to <strong>studionet</strong> (not Asimov/Bradbury testnet).</li>
           <li>Fund that same address with GEN from the GenLayer Studio <strong>Accounts</strong> panel. Do not use the public testnet faucet.</li>
-          <li>Create a match: pick two player addresses, a category chip, a prize chip, a result deadline, and a challenge window. Share the <span className="mono">?match=</span> link.</li>
-          <li>A player or the organizer declares A or B before the deadline. The challenge countdown starts.</li>
-          <li>If nobody challenges, anyone can click <strong>Claim prize</strong> after the window. If a player challenges, paste 1 Wikipedia evidence article + 2 different Wikipedia reference articles, then <strong>Request AI adjudication</strong>.</li>
-          <li>Read the on-chain <strong>verdict</strong> + <strong>reason</strong> + confidence. If AI stays stuck in CHALLENGED or low-confidence past the timeout, anyone can click <strong>Timeout refund to organizer</strong>. Confirm Explorer <strong>GenVM Result: SUCCESS</strong>, not only FINALIZED.</li>
+          <li>Create a match: two player addresses + in-game tags, game title, platform match ID, match timestamp, required 64-hex replay hash, prize, deadline, and challenge window. Share the app <span className="mono">?match=</span> link (that query is only the UI share link, not evidence).</li>
+          <li>Declare A or B with an official result URL and a distinct replay/VOD URL. Both must be https match-linked records whose <strong>path</strong> contains the platform match ID. Wikipedia is rejected.</li>
+          <li>If nobody challenges, anyone can click <strong>Claim prize</strong> after the window. A player challenge must reuse the committed match ID and a participant tag, plus 1 anti-cheat/platform evidence record and 2 distinct match-linked references. Then <strong>Request AI adjudication</strong>.</li>
+          <li>Read the on-chain <strong>verdict</strong> + <strong>reason</strong> + confidence. Evidence cannot be replaced after a challenge starts. If AI stays stuck in CHALLENGED or low-confidence past the timeout, anyone can click <strong>Timeout refund to organizer</strong>. Confirm Explorer <strong>GenVM Result: SUCCESS</strong>, not only FINALIZED.</li>
         </ol>
       </section>
 
@@ -832,6 +987,70 @@ export default function App() {
                   <ClipboardPaste size={14} /> Paste
                 </button>
               </div>
+            </div>
+          </div>
+
+          <div className="two-col">
+            <div className="field">
+              <label className="label">Game title</label>
+              <input
+                className="input"
+                value={gameTitle}
+                onChange={(e) => setGameTitle(e.target.value)}
+                placeholder="Counter-Strike 2"
+              />
+            </div>
+            <div className="field">
+              <label className="label">Platform / tournament match ID</label>
+              <input
+                className="input mono"
+                value={platformMatchId}
+                onChange={(e) => setPlatformMatchId(e.target.value.trim())}
+                placeholder={EXAMPLE_PLATFORM_MATCH_ID}
+              />
+            </div>
+          </div>
+
+          <div className="two-col">
+            <div className="field">
+              <label className="label">Player A in-game tag</label>
+              <input
+                className="input mono"
+                value={playerATag}
+                onChange={(e) => setPlayerATag(e.target.value.trim())}
+                placeholder={EXAMPLE_PLAYER_A_TAG}
+              />
+            </div>
+            <div className="field">
+              <label className="label">Player B in-game tag</label>
+              <input
+                className="input mono"
+                value={playerBTag}
+                onChange={(e) => setPlayerBTag(e.target.value.trim())}
+                placeholder={EXAMPLE_PLAYER_B_TAG}
+              />
+            </div>
+          </div>
+
+          <div className="two-col">
+            <div className="field">
+              <label className="label">Match played at (unix seconds)</label>
+              <input
+                className="input mono"
+                value={matchPlayedAt}
+                onChange={(e) => setMatchPlayedAt(e.target.value.replace(/[^0-9]/g, ''))}
+              />
+              <div className="hint">When the match was played — not the result deadline.</div>
+            </div>
+            <div className="field">
+              <label className="label">Replay content hash (required, 64 hex, integrity only)</label>
+              <input
+                className="input mono"
+                value={replayHash}
+                onChange={(e) => setReplayHash(e.target.value.trim().toLowerCase())}
+                placeholder={EXAMPLE_REPLAY_HASH}
+              />
+              <div className="hint">Integrity evidence only — not proof of cheat. Declare must reuse this hash if set.</div>
             </div>
           </div>
 

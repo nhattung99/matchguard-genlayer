@@ -11,20 +11,32 @@ https://matchguard-genlayer.vercel.app
 ## Deployed Contract
 
 - **Network:** studionet (GenLayer Studio hosted)
-- **Address:** `0xB53DDd9F969122c05A1BFF099f5a097FD3824Cbc`
-- **Explorer:** https://explorer-studio.genlayer.com/address/0xB53DDd9F969122c05A1BFF099f5a097FD3824Cbc
+- **Address:** `0x9E436D9f8DB42C834FD906EBE9E95F48aB267571`
+- **Explorer:** https://explorer-studio.genlayer.com/address/0x9E436D9f8DB42C834FD906EBE9E95F48aB267571
+- **Source on GitHub:** [`contracts/match_guard.py`](contracts/match_guard.py) — this file is the exact Studio deploy (match-specific records, Wikipedia rejected).
+
+### Live proof (Match #3)
+
+| Step | Method | GenVM | Tx |
+|---|---|---|---|
+| Create | `create_match` | SUCCESS | https://explorer-studio.genlayer.com/tx/0x4719098092bbd265bb2ebbc6406cfd1400ee8d1aad80fd8c71ea7022edf0ba38 |
+| Declare | `declare_result` | SUCCESS | https://explorer-studio.genlayer.com/tx/0x05130328685fbc491ee27e0b574c9ab6b41f6ba707ffb74c5497694094b071ec |
+| Challenge | `challenge_result` | SUCCESS | https://explorer-studio.genlayer.com/tx/0x8caec7b697dff6cd675bf5aebf9f8af6a176136539ee82cb350dffe0759e3514 |
+| Adjudicate + payout | `resolve_challenge` | SUCCESS | https://explorer-studio.genlayer.com/tx/0xc2b7d01e42afec28ffd4db8fd79ccb26704b5312afe30ee1babbb3fb10a6d1d9 |
+
+UI: `RESOLVED_NO_CHEAT` / `NO_CHEAT` / confidence 98 / `settled`. Prize leaves via `emit_transfer` in the same `resolve_challenge` tx. Studio Explorer lists the EOA receive as a child `(constructor) ERROR` (`0x858f44350dce14dec60c545af901d92669d757ad3703caa3aebac52271334660`) — that is how studionet renders a transfer to a wallet, not a GenVM rollback of the parent. If a transfer ever throws, status is `PAYOUT_FAILED` and `retry_resolution` pays without re-running AI.
 
 ## How to try
 
 1. Open the live app (or `cd frontend && npm run dev`).
 2. Install MetaMask. Click **Connect wallet**. The app adds/switches to **studionet** (chain id from `genlayer-js` `chains.studionet`).
 3. Fund that address with GEN from the GenLayer Studio **Accounts** panel. Do **not** use `testnet-faucet.genlayer.foundation` — that faucet credits Asimov/Bradbury, not studionet.
-4. Create a match. Pick category chips (FPS / MOBA / Fighting / Other), paste two player addresses, a prize chip, a result deadline, and a challenge window (6h / 12h / 24h / 48h, plus a 2-minute demo). Prize strings are parsed with `parseGenToWei` (no float).
-5. Share the `?match=<id>` link. A player or the organizer declares **A** or **B** before the deadline.
-6. The UI shows the challenge countdown. If it closes with no challenge, anyone can click **Claim prize**. If a player challenges, paste 1 Wikipedia evidence article + 2 distinct Wikipedia reference articles, then **Request AI adjudication**. Consensus is slower than a normal write — wait for the spinner.
-7. Read the verdict + `reason` + confidence. Open the tx on [Explorer](https://explorer-studio.genlayer.com/address/0xB53DDd9F969122c05A1BFF099f5a097FD3824Cbc). Confirm **GenVM Result: SUCCESS**, not only `FINALIZED`. JS-heavy sites (HLTV, Twitter) are rejected on-chain. If AI stays in `CHALLENGED` or `DISPUTED_LOW_CONFIDENCE` past the timeout, anyone can call **Timeout refund to organizer**.
+4. Create a match. Enter game title, platform/tournament match ID, both player addresses **and** in-game tags, match timestamp, required 64-hex replay hash (integrity only), prize, deadline, and challenge window. Prize strings are parsed with `parseGenToWei` (no float).
+5. Share the app `?match=<id>` link (UI only). A player or the organizer declares **A** or **B** before the deadline, committing an **official result URL** and a distinct **replay/VOD URL**. Both must be `https://` match-linked records whose **path** contains `platform_match_id`. Wikipedia / query-string `?match=` binding is rejected.
+6. The UI shows the challenge countdown. If it closes with no challenge, anyone can click **Claim prize**. If a player challenges, the claimed match ID and player tag must match the committed identity. Paste 1 match-linked evidence record + 2 distinct match-linked references (https, path-bound, no overlap with committed official/replay), pick `PLATFORM_API` / `ANTI_CHEAT` / `ORGANIZER`, then **Request AI adjudication**. Demo records: `https://matchguard-genlayer.vercel.app/records/FACEIT-CS2-88421/`. HLTV/Twitter/YouTube fail `web.render`.
+7. Read the verdict + `reason` + confidence. Open the tx on [Explorer](https://explorer-studio.genlayer.com/address/0x9E436D9f8DB42C834FD906EBE9E95F48aB267571). Confirm **GenVM Result: SUCCESS**, not only `FINALIZED`. Evidence is **frozen** once a challenge starts. If AI stays in `CHALLENGED` or `DISPUTED_LOW_CONFIDENCE` past the timeout, anyone can call **Timeout refund to organizer**.
 
-**Expected outcome:** `AWAITING_RESULT` → `RESULT_DECLARED` → either `RESOLVED_UNCHALLENGED` (no challenge) or `CHALLENGED` → `RESOLVED_NO_CHEAT` / `RESOLVED_CHEAT_CONFIRMED`. Low confidence (`< 60`) becomes `DISPUTED_LOW_CONFIDENCE` so a player can re-challenge with new evidence (while the window is still open). If AI never reaches a terminal verdict, permissionless `recover_unresolved_escrow` returns the prize to the organizer as `RESOLVED_TIMEOUT_REFUND`. Transfer failure becomes `PAYOUT_FAILED` with a retry that does **not** re-run AI. If nobody declares before the deadline, the organizer claims `EXPIRED_REFUNDED`.
+**Expected outcome:** `AWAITING_RESULT` → `RESULT_DECLARED` → either `RESOLVED_UNCHALLENGED` (no challenge) or `CHALLENGED` → `RESOLVED_NO_CHEAT` / `RESOLVED_CHEAT_CONFIRMED`. Low confidence (`< 60`) becomes `DISPUTED_LOW_CONFIDENCE` with evidence frozen (no replacement). If AI never reaches a terminal verdict, permissionless `recover_unresolved_escrow` returns the prize to the organizer as `RESOLVED_TIMEOUT_REFUND`. Transfer failure becomes `PAYOUT_FAILED` with a retry that does **not** re-run AI. If nobody declares before the deadline, the organizer claims `EXPIRED_REFUNDED`. Replay/VOD hash is integrity evidence only — not proof of cheat. `ORGANIZER` attestation is a disclosed trust assumption; the opposing player files the challenge as the response path.
 
 ---
 
@@ -37,15 +49,15 @@ https://matchguard-genlayer.vercel.app
 
 ## Resolution flow
 
-1. **Create match** — `create_match` (payable) + `gl.message.value` = prize. Status: `AWAITING_RESULT`.
-2. **Share** `?match=<id>` with both players.
-3. **Declare result** — player or organizer calls `declare_result` with `A` or `B` before `result_deadline`. Status: `RESULT_DECLARED`.
-4. **Challenge window** — a player may `challenge_result` with 1–3 Wikipedia evidence URLs + 2–3 distinct Wikipedia reference articles (https only, unique article paths).
+1. **Create match** — `create_match` (payable) + `gl.message.value` = prize. Stores `game_title`, `platform_match_id`, player tags, `match_played_at`, required `replay_content_hash`. Status: `AWAITING_RESULT`.
+2. **Share** the app `?match=<id>` link with both players (not an evidence URL).
+3. **Declare result** — player or organizer calls `declare_result` with `A`/`B` plus match-linked `official_result_url` and `replay_or_vod_url` (https, path contains `platform_match_id`, record token, not Wikipedia). Hash must match create. Status: `RESULT_DECLARED`.
+4. **Challenge window** — a player may `challenge_result` with claimed match ID + accused tag + `PLATFORM_API`/`ANTI_CHEAT`/`ORGANIZER` + 1–3 match-linked evidence records + 2–3 distinct references. Rejects Wikipedia, query-only binding, mismatch, http/duplicate/overlapping URLs, and any replacement after freeze.
 5. **No challenge** — after the window, anyone calls `finalize_unchallenged_payout` → prize to declared winner → `RESOLVED_UNCHALLENGED`. No AI.
 6. **Challenge** — `resolve_challenge` runs `gl.vm.run_nondet`:
-   - Leader: `gl.nondet.web.render` every URL, isolate/truncate page text, `gl.nondet.exec_prompt`, parse JSON `{verdict, confidence, reason}`.
+   - Leader: `gl.nondet.web.render` official + replay + evidence + refs, isolate/truncate page text, `gl.nondet.exec_prompt`, parse JSON `{verdict, confidence, reason}`. Hash is labeled integrity-only. ORGANIZER trust is disclosed in the prompt.
    - Validator: `my.verdict == leader.verdict` (absolute) and the same `confidence >= 60` branch.
-7. `confidence < 60` → `DISPUTED_LOW_CONFIDENCE` (re-challenge, no payout).
+7. `confidence < 60` → `DISPUTED_LOW_CONFIDENCE` (evidence frozen, no replacement, no payout).
 8. `NO_CHEAT` → prize to declared winner → `RESOLVED_NO_CHEAT`. `CHEAT_CONFIRMED` → prize to the other player → `RESOLVED_CHEAT_CONFIRMED`.
 9. If still `CHALLENGED` or `DISPUTED_LOW_CONFIDENCE` after `challenged_at + challenge_window_seconds`, anyone calls `recover_unresolved_escrow` → prize back to organizer → `RESOLVED_TIMEOUT_REFUND`.
 10. Transfer fail → `PAYOUT_FAILED`. `retry_resolution` reuses the stored verdict/declared winner and **does not re-run AI**.
@@ -120,10 +132,13 @@ Without an address the UI stays in preview mode (banner, no white crash).
 ```bash
 gltest tests/test_match_guard.py
 npm run test:money
+npm run test:urls
 npm run check:float
 ```
 
-Coverage includes: unchallenged payout after the window, NO_CHEAT keeps the declared winner, CHEAT_CONFIRMED reverses the winner, expired refund, declare after deadline, challenge after window closed, missing URLs, non-Wikipedia / duplicate / overlapping sources, low-confidence DISPUTED then re-challenge, web fail / broken JSON, double-declare / double-challenge / double-resolve, permissionless timeout refund for stuck CHALLENGED and DISPUTED_LOW_CONFIDENCE, and real `emit_transfer` exceptions on unchallenged / NO_CHEAT / CHEAT_CONFIRMED / expired-refund / timeout-refund → `PAYOUT_FAILED` → successful `retry_resolution`.
+Latest recorded run: **27 passed** (see [`tests/RESULTS.md`](tests/RESULTS.md)). Config: [`gltest.config.yaml`](gltest.config.yaml).
+
+Coverage includes: unchallenged payout after the window, NO_CHEAT keeps the declared winner, CHEAT_CONFIRMED reverses the winner, expired refund, declare after deadline, challenge after window closed, missing URLs, mismatched match IDs, participant mismatch, altered replay hash, Wikipedia / query-only binding rejected, unbound/http/duplicate/overlapping sources, evidence freeze after low-confidence, failed rendering / broken JSON, double-declare / double-challenge / double-resolve, permissionless timeout refund for stuck CHALLENGED and DISPUTED_LOW_CONFIDENCE, and real `emit_transfer` exceptions on unchallenged / NO_CHEAT / CHEAT_CONFIRMED / expired-refund / timeout-refund → `PAYOUT_FAILED` → successful `retry_resolution`.
 
 ---
 
