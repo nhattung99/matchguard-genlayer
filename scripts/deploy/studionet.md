@@ -5,8 +5,11 @@ Deploy from GenLayer Studio **Run & Debug**. Confirm **GenVM Result: SUCCESS**, 
 | Field | Value |
 |---|---|
 | Network | studionet |
-| Address | `0x9E436D9f8DB42C834FD906EBE9E95F48aB267571` |
-| Explorer | https://explorer-studio.genlayer.com/address/0x9E436D9f8DB42C834FD906EBE9E95F48aB267571 |
+| Address | `0x96C3EeFd87855Df9765ABCA688946456c284c899` |
+| Explorer | https://explorer-studio.genlayer.com/address/0x96C3EeFd87855Df9765ABCA688946456c284c899 |
+| Constructor | SUCCESS (2026-09-13) |
+
+This revision: `ALLOWED_RECORD_HOSTS`, `_EoaRecipient.emit_transfer`, stored `payout_recipient`.
 
 `create_match` must be `@gl.public.write.payable`. A non-payable write that sends GEN fails with:
 

@@ -50,6 +50,14 @@ assert(threw, 'query-only platform URL must fail');
 
 threw = false;
 try {
+  assertUrlBound(`https://evil.example/records/${EXAMPLE_PLATFORM_MATCH_ID}/official.html`, EXAMPLE_PLATFORM_MATCH_ID);
+} catch {
+  threw = true;
+}
+assert(threw, 'unallowlisted host must fail even with match id in path');
+
+threw = false;
+try {
   validateChallengeUrls([EXAMPLE_EVIDENCE_URL], [EXAMPLE_REFERENCE_URLS[0], EXAMPLE_REFERENCE_URLS[0]], EXAMPLE_PLATFORM_MATCH_ID);
 } catch {
   threw = true;

@@ -83,10 +83,17 @@ def _match(contract, match_id):
 
 
 def _addr(account):
-    try:
-        return account.as_hex
-    except Exception:
-        return str(account)
+    if hasattr(account, "as_hex"):
+        try:
+            return str(account.as_hex)
+        except Exception:
+            pass
+    if isinstance(account, (bytes, bytearray)):
+        return "0x" + bytes(account).hex()
+    s = str(account).strip()
+    if s.startswith("0x") or s.startswith("0X"):
+        return s
+    return s
 
 
 def _create(
@@ -517,13 +524,19 @@ def test_expired_refund_before_deadline_blocked(direct_vm, direct_deploy, direct
         contract.claim_expired_refund(match_id)
 
 
-def _failing_transfer(monkeypatch):
+def _failing_transfer(monkeypatch, vm):
     import gltest.direct.loader
 
-    def failing_emit_transfer(self, value):
+    def failing_emit_transfer(self, value=None, **kwargs):
         raise Exception("Simulated native transfer execution failure")
 
+    def hook(_active_vm, request):
+        if isinstance(request, dict) and "EthSend" in request:
+            raise Exception("Simulated native transfer execution failure")
+        return None
+
     monkeypatch.setattr(gltest.direct.loader._EOAProxy, "emit_transfer", failing_emit_transfer)
+    monkeypatch.setattr(vm, "_gl_call_hook", hook, raising=False)
 
 
 def test_transfer_fail_unchallenged_then_retry(direct_vm, direct_deploy, direct_accounts, monkeypatch):
@@ -539,7 +552,7 @@ def test_transfer_fail_unchallenged_then_retry(direct_vm, direct_deploy, direct_
     _declare(contract, vm, player_a, match_id, "A")
     _close_challenge_window(contract, match_id, monkeypatch)
 
-    _failing_transfer(monkeypatch)
+    _failing_transfer(monkeypatch, vm)
     vm.sender = organizer
     contract.finalize_unchallenged_payout(match_id)
 
@@ -568,7 +581,7 @@ def test_transfer_fail_no_cheat_then_retry(direct_vm, direct_deploy, direct_acco
     _declare(contract, vm, player_a, match_id, "A")
     _challenge(contract, vm, player_b, match_id)
 
-    _failing_transfer(monkeypatch)
+    _failing_transfer(monkeypatch, vm)
     sim_installMocks(
         vm,
         web=_standard_web_no_cheat(),
@@ -582,6 +595,8 @@ def test_transfer_fail_no_cheat_then_retry(direct_vm, direct_deploy, direct_acco
     assert row["settled"] is False
     assert row["verdict"] == "NO_CHEAT"
     assert "Payout failed" in row["verdict_reason"]
+    assert row["payout_recipient"].lower() == _addr(player_a).lower()
+    assert row["prize_amount"] == "2500"
 
     monkeypatch.undo()
     vm.sender = player_b
@@ -604,7 +619,7 @@ def test_transfer_fail_cheat_confirmed_then_retry(direct_vm, direct_deploy, dire
     _declare(contract, vm, player_a, match_id, "A")
     _challenge(contract, vm, player_b, match_id)
 
-    _failing_transfer(monkeypatch)
+    _failing_transfer(monkeypatch, vm)
     sim_installMocks(
         vm,
         web=_standard_web_cheat(),
@@ -617,6 +632,8 @@ def test_transfer_fail_cheat_confirmed_then_retry(direct_vm, direct_deploy, dire
     assert row["status"] == "PAYOUT_FAILED"
     assert row["settled"] is False
     assert row["verdict"] == "CHEAT_CONFIRMED"
+    assert row["payout_recipient"].lower() == _addr(player_b).lower()
+    assert row["prize_amount"] == "1800"
 
     monkeypatch.undo()
     vm.sender = organizer
@@ -639,7 +656,7 @@ def test_transfer_fail_expired_refund_then_retry(direct_vm, direct_deploy, direc
         contract, vm, organizer, player_a, player_b, prize=700, result_deadline=PAST
     )
 
-    _failing_transfer(monkeypatch)
+    _failing_transfer(monkeypatch, vm)
     vm.sender = organizer
     contract.claim_expired_refund(match_id)
 
@@ -809,7 +826,7 @@ def test_timeout_refund_transfer_fail_then_retry(direct_vm, direct_deploy, direc
     window = int(_match(contract, match_id)["challenge_window_seconds"])
     _warp_now(monkeypatch, challenged_at + window + 1)
 
-    _failing_transfer(monkeypatch)
+    _failing_transfer(monkeypatch, vm)
     vm.sender = player_b
     contract.recover_unresolved_escrow(match_id)
     row = _match(contract, match_id)
@@ -900,3 +917,78 @@ def test_wikipedia_and_query_only_binding_rejected(direct_vm, direct_deploy, dir
     assert row["game_title"] == GAME
     assert row["official_result_url"] == OFFICIAL
     assert row["replay_content_hash"] == REPLAY_HASH
+
+
+def test_unallowlisted_issuer_rejected(direct_vm, direct_deploy, direct_accounts):
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    hosts = _parse(contract.get_approved_hosts())
+    assert "faceit.com" in hosts
+    assert "matchguard-genlayer.vercel.app" in hosts
+    assert "wikipedia.org" not in hosts
+    assert "example.com" not in hosts
+
+    match_id = _create(contract, vm, organizer, player_a, player_b)
+    vm.sender = player_a
+    fake = "https://evil.example/records/" + MID + "/official.html"
+    with pytest.raises(Exception):
+        contract.declare_result(match_id, "A", fake, REPLAY, REPLAY_HASH)
+    _declare(contract, vm, player_a, match_id, "A")
+    vm.sender = player_b
+    with pytest.raises(Exception):
+        contract.challenge_result(
+            match_id, MID, TAG_A, "ANTI_CHEAT", [fake], [REF1, REF2]
+        )
+    assert _match(contract, match_id)["status"] == "RESULT_DECLARED"
+
+
+def test_balance_conservation_no_cheat_and_cheat(direct_vm, direct_deploy, direct_accounts):
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    prize_clean = 900
+    prize_cheat = 400
+    id_clean = _create(contract, vm, organizer, player_a, player_b, prize=prize_clean)
+    id_cheat = _create(contract, vm, organizer, player_a, player_b, prize=prize_cheat)
+    assert int(_match(contract, id_clean)["prize_amount"]) == prize_clean
+    assert int(_match(contract, id_cheat)["prize_amount"]) == prize_cheat
+
+    _declare(contract, vm, player_a, id_clean, "A")
+    _challenge(contract, vm, player_b, id_clean)
+    sim_installMocks(
+        vm,
+        web=_standard_web_no_cheat(),
+        llm={"verdict": "NO_CHEAT", "confidence": 88, "reason": "Clean match-specific records"},
+    )
+    vm.sender = player_a
+    contract.resolve_challenge(id_clean)
+    clean = _match(contract, id_clean)
+    assert clean["status"] == "RESOLVED_NO_CHEAT"
+    assert clean["settled"] is True
+    assert clean["verdict"] == "NO_CHEAT"
+    assert int(clean["prize_amount"]) == prize_clean
+    assert clean["payout_recipient"].lower() == _addr(player_a).lower()
+
+    _declare(contract, vm, player_a, id_cheat, "A")
+    _challenge(contract, vm, player_b, id_cheat)
+    sim_installMocks(
+        vm,
+        web=_standard_web_cheat(),
+        llm={"verdict": "CHEAT_CONFIRMED", "confidence": 91, "reason": "Anti-cheat confirmed"},
+    )
+    vm.sender = player_b
+    contract.resolve_challenge(id_cheat)
+    cheat = _match(contract, id_cheat)
+    assert cheat["status"] == "RESOLVED_CHEAT_CONFIRMED"
+    assert cheat["settled"] is True
+    assert cheat["verdict"] == "CHEAT_CONFIRMED"
+    assert int(cheat["prize_amount"]) == prize_cheat
+    assert cheat["payout_recipient"].lower() == _addr(player_b).lower()
+    assert int(clean["prize_amount"]) + int(cheat["prize_amount"]) == prize_clean + prize_cheat

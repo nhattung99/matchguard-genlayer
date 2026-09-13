@@ -60,10 +60,16 @@ export const EXAMPLE_PLAYER_B_TAG = 'device';
 export const EXAMPLE_REPLAY_HASH = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 export const RECORD_ORIGIN = 'https://matchguard-genlayer.vercel.app';
-const BLOCKED_HOST_SUFFIXES = ['wikipedia.org', 'wikimedia.org', 'mediawiki.org'];
-const RECORD_TOKENS = [
-  'match', 'room', 'replay', 'vod', 'anticheat', 'anti-cheat',
-  'bracket', 'result', 'report', 'records', 'vac',
+export const ALLOWED_RECORD_HOSTS = [
+  'matchguard-genlayer.vercel.app',
+  'faceit.com',
+  'api.faceit.com',
+  'start.gg',
+  'challonge.com',
+  'toornament.com',
+  'battlefy.com',
+  'esl.com',
+  'esea.net',
 ];
 
 export const recordUrl = (matchId, file) =>
@@ -108,8 +114,8 @@ function hostAndPath(url) {
   return { host, path };
 }
 
-function hostBlocked(host) {
-  return BLOCKED_HOST_SUFFIXES.some((suf) => host === suf || host.endsWith(`.${suf}`));
+function hostAllowed(host) {
+  return ALLOWED_RECORD_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
 }
 
 export function assertUrlBound(url, platformMatchId) {
@@ -117,14 +123,11 @@ export function assertUrlBound(url, platformMatchId) {
   const mid = String(platformMatchId || '').trim();
   if (!mid) throw new Error('platform_match_id is required.');
   const { host, path } = hostAndPath(norm);
-  if (hostBlocked(host)) {
-    throw new Error('Generic encyclopedia pages cannot establish a match result or cheat claim.');
+  if (!hostAllowed(host)) {
+    throw new Error('URL host is not an approved tournament, platform, replay, or anti-cheat issuer.');
   }
   if (!path.toLowerCase().includes(mid.toLowerCase())) {
     throw new Error(`URL path must contain platform_match_id ${mid}; query-string binding is rejected.`);
-  }
-  if (!RECORD_TOKENS.some((tok) => path.toLowerCase().includes(tok))) {
-    throw new Error('URL must be a match-linked official, replay, bracket, or anti-cheat record.');
   }
   return norm;
 }

@@ -53,6 +53,7 @@ import {
   exampleOfficialUrl,
   exampleReplayUrl,
   validateChallengeUrls,
+  assertUrlBound,
 } from './data/categories.js';
 
 const shortAddr = (a) => {
@@ -63,6 +64,11 @@ const shortAddr = (a) => {
 };
 
 const sameAddr = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+
+const isNonZeroAddr = (value) => {
+  const s = String(value || '').trim().toLowerCase();
+  return /^0x[0-9a-f]{40}$/.test(s) && !/^0x0+$/.test(s);
+};
 
 const pasteClipboard = async () => {
   const text = await navigator.clipboard.readText();
@@ -285,7 +291,7 @@ export default function App() {
           `AI transaction finalized but GenVM rolled back — match is still CHALLENGED. ` +
           `Open Explorer: ${txExplorerUrl(hash)}. ` +
           `Usual cause: web.render failed on a JS-heavy URL (HLTV, Twitter). ` +
-          `Create a new match and challenge with match-linked official/replay/anti-cheat records (path must contain the platform match ID). Wikipedia is rejected.`
+          `Create a new match and challenge with records from an approved issuer (FACEIT, start.gg, ESL, or MatchGuard demo). The URL path must contain the platform match ID. Wikipedia and unallowlisted hosts are rejected.`
         );
       }
       const status = String(row?.status || '');
@@ -297,7 +303,7 @@ export default function App() {
         (fnName === 'resolve_challenge' && (status.startsWith('RESOLVED_') || status === 'DISPUTED_LOW_CONFIDENCE' || status === 'PAYOUT_FAILED')) ||
         (fnName === 'finalize_unchallenged_payout' && (status === 'RESOLVED_UNCHALLENGED' || status === 'PAYOUT_FAILED')) ||
         (fnName === 'recover_unresolved_escrow' && (status === 'RESOLVED_TIMEOUT_REFUND' || status === 'PAYOUT_FAILED')) ||
-        (fnName === 'retry_resolution' && settledOk) ||
+        (fnName === 'retry_resolution' && (settledOk || status === 'PAYOUT_FAILED')) ||
         (fnName === 'claim_expired_refund' && (status === 'EXPIRED_REFUNDED' || status === 'PAYOUT_FAILED'));
       if (receiptLooksFailed(receipt) && !okByState) {
         throw new Error(
@@ -380,8 +386,11 @@ export default function App() {
     try {
       const row = details[matchId] || {};
       const mid = String(row.platform_match_id || platformMatchId || '').trim();
-      const official = officialResultUrl.trim() || exampleOfficialUrl(mid);
-      const replay = replayOrVodUrl.trim() || exampleReplayUrl(mid);
+      const official = assertUrlBound(officialResultUrl.trim() || exampleOfficialUrl(mid), mid);
+      const replay = assertUrlBound(replayOrVodUrl.trim() || exampleReplayUrl(mid), mid);
+      if (official.toLowerCase() === replay.toLowerCase()) {
+        throw new Error('Official result URL and replay/VOD URL must be distinct.');
+      }
       const hash = (declareHash.trim() || row.replay_content_hash || replayHash || '').toLowerCase();
       await runWrite('declare_result', [matchId, side, official, replay, hash]);
     } catch (err) {
@@ -475,7 +484,7 @@ export default function App() {
       <div className="field">
         <label className="label">Evidence URLs (min 1, bound to this match)</label>
         <p className="hint">
-          HTTPS official / replay / anti-cheat / bracket records only. The URL <strong>path</strong> must contain this platform match ID. Wikipedia and query-string <span className="mono">?match=</span> binding are rejected. Demo records (GenVM can fetch):
+          HTTPS records from an <strong>approved issuer</strong> only (FACEIT, start.gg, ESL, or MatchGuard demo records). The URL path must contain this platform match ID. Wikipedia and query-string binding are rejected. Demo records:
         </p>
         <button
           type="button"
@@ -622,6 +631,9 @@ export default function App() {
             <div>Attestation: {detail.attestation_kind || row.attestation_kind} · accused {detail.accused_player_tag || row.accused_player_tag || '—'}</div>
           )}
           {(detail.evidence_frozen || row.evidence_frozen) && <div>Evidence frozen — cannot replace after adjudication starts.</div>}
+          {isNonZeroAddr(detail.payout_recipient || row.payout_recipient) && (
+            <div>Payout recipient: <span className="mono">{shortAddr(detail.payout_recipient || row.payout_recipient)}</span></div>
+          )}
           {status === 'AWAITING_RESULT' && (
             <div className="countdown">
               <Timer size={13} /> Result deadline: {deadlinePassed ? 'passed' : formatDuration(deadlineLeft)}
@@ -667,7 +679,7 @@ export default function App() {
           {isOpen && status === 'AWAITING_RESULT' && isParty && !deadlinePassed && (
             <>
               <div className="field">
-                <label className="label">Official result URL (https, must contain platform match ID)</label>
+                <label className="label">Official result URL (https, approved issuer, path contains platform match ID)</label>
                 <input
                   className="input mono"
                   value={officialResultUrl}
@@ -794,10 +806,15 @@ export default function App() {
             </button>
           )}
 
-          {isOpen && status === 'PAYOUT_FAILED' && isParty && (
-            <button className="btn-primary full" type="button" disabled={loading} onClick={() => handleRetry(row.match_id)}>
-              <RotateCcw size={15} /> Retry payout
-            </button>
+          {status === 'PAYOUT_FAILED' && (
+            <>
+              <div className="warn-box">
+                PAYOUT_FAILED — verdict and payout recipient are stored. Prize is still in escrow. Retry does not re-run AI.
+              </div>
+              <button className="btn-primary full" type="button" disabled={loading} onClick={() => handleRetry(row.match_id)}>
+                <RotateCcw size={15} /> Retry payout
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -849,9 +866,10 @@ export default function App() {
           <li>Install MetaMask. Click <strong>Connect wallet</strong> — the app switches to <strong>studionet</strong> (not Asimov/Bradbury testnet).</li>
           <li>Fund that same address with GEN from the GenLayer Studio <strong>Accounts</strong> panel. Do not use the public testnet faucet.</li>
           <li>Create a match: two player addresses + in-game tags, game title, platform match ID, match timestamp, required 64-hex replay hash, prize, deadline, and challenge window. Share the app <span className="mono">?match=</span> link (that query is only the UI share link, not evidence).</li>
-          <li>Declare A or B with an official result URL and a distinct replay/VOD URL. Both must be https match-linked records whose <strong>path</strong> contains the platform match ID. Wikipedia is rejected.</li>
+          <li>Declare A or B with an official result URL and a distinct replay/VOD URL. Both must be https records from an <strong>approved issuer</strong> (FACEIT, start.gg, ESL, or MatchGuard demo) whose <strong>path</strong> contains the platform match ID. Wikipedia and unallowlisted hosts are rejected.</li>
           <li>If nobody challenges, anyone can click <strong>Claim prize</strong> after the window. A player challenge must reuse the committed match ID and a participant tag, plus 1 anti-cheat/platform evidence record and 2 distinct match-linked references. Then <strong>Request AI adjudication</strong>.</li>
           <li>Read the on-chain <strong>verdict</strong> + <strong>reason</strong> + confidence. Evidence cannot be replaced after a challenge starts. If AI stays stuck in CHALLENGED or low-confidence past the timeout, anyone can click <strong>Timeout refund to organizer</strong>. Confirm Explorer <strong>GenVM Result: SUCCESS</strong>, not only FINALIZED.</li>
+          <li>If status is <strong>PAYOUT_FAILED</strong>, the verdict and payout recipient stay stored. Anyone can click <strong>Retry payout</strong> — that does not re-run AI.</li>
         </ol>
       </section>
 
@@ -1002,6 +1020,7 @@ export default function App() {
             </div>
             <div className="field">
               <label className="label">Platform / tournament match ID</label>
+              <div className="hint">Evidence URLs must come from an approved issuer and include this ID in the path.</div>
               <input
                 className="input mono"
                 value={platformMatchId}

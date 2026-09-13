@@ -31,20 +31,30 @@ MAX_ID_LEN = 64
 MAX_TAG_LEN = 40
 MAX_TITLE_LEN = 80
 VALID_ATTESTATIONS = ("PLATFORM_API", "ANTI_CHEAT", "ORGANIZER")
-BLOCKED_HOST_SUFFIXES = ("wikipedia.org", "wikimedia.org", "mediawiki.org")
-RECORD_TOKENS = (
-    "match",
-    "room",
-    "replay",
-    "vod",
-    "anticheat",
-    "anti-cheat",
-    "bracket",
-    "result",
-    "report",
-    "records",
-    "vac",
+# On-chain allowlist: tournament / platform / replay / bracket / anti-cheat issuers.
+# Arbitrary hosts cannot satisfy evidence even if the path contains the match ID.
+ALLOWED_RECORD_HOSTS = (
+    "matchguard-genlayer.vercel.app",
+    "faceit.com",
+    "api.faceit.com",
+    "start.gg",
+    "challonge.com",
+    "toornament.com",
+    "battlefy.com",
+    "esl.com",
+    "esea.net",
 )
+
+
+@gl.evm.contract_interface
+class _EoaRecipient:
+    """External message to an EOA. Do not use get_contract_at(EOA) — that child call GenVM-errors."""
+
+    class View:
+        pass
+
+    class Write:
+        pass
 
 
 def _to_address(val) -> Address:
@@ -266,38 +276,27 @@ def _url_host_and_path(url: str):
     return host, path
 
 
-def _host_blocked(host: str) -> bool:
-    for suf in BLOCKED_HOST_SUFFIXES:
-        if host == suf or host.endswith("." + suf):
-            return True
-    return False
-
-
-def _path_has_record_token(path: str) -> bool:
-    p = path.lower()
-    for tok in RECORD_TOKENS:
-        if tok in p:
+def _host_allowed(host: str) -> bool:
+    for allowed in ALLOWED_RECORD_HOSTS:
+        if host == allowed or host.endswith("." + allowed):
             return True
     return False
 
 
 def _assert_bound(url: str, platform_match_id: str) -> str:
-    """Match-linked official / replay / anti-cheat / bracket record.
+    """Approved-issuer record bound to the committed platform_match_id.
 
-    Query-string binding (?match=ID on a generic article) is rejected.
-    Encyclopedia hosts cannot establish a particular match result or cheat claim.
+    Query-string binding (?match=ID) is rejected. Host must be on ALLOWED_RECORD_HOSTS.
     """
     norm = _parse_https_url(url)
     host, path = _url_host_and_path(norm)
-    if _host_blocked(host):
-        raise UserError("Generic encyclopedia pages cannot establish a match result or cheat claim")
+    if not _host_allowed(host):
+        raise UserError("URL host is not an approved tournament, platform, replay, or anti-cheat issuer")
     mid = str(platform_match_id).strip()
     if mid.lower() not in path.lower():
         raise UserError(
             "URL path must contain platform_match_id " + mid + "; query-string binding is rejected"
         )
-    if not _path_has_record_token(path):
-        raise UserError("URL must be a match-linked official, replay, bracket, or anti-cheat record")
     return norm
 
 
@@ -361,6 +360,7 @@ class Match:
     verdict_reason: str
     confidence: u256
     settled: bool
+    payout_recipient: Address
 
 
 class Contract(gl.Contract):
@@ -384,9 +384,14 @@ class Contract(gl.Contract):
         return self._is_player(m, sender) or _same_addr(sender, m.organizer)
 
     def _try_transfer(self, recipient: Address, amount: bigint) -> None:
+        """External EOA transfer. get_contract_at(EOA).emit_transfer creates a failing IC child tx."""
         if amount <= bigint(0):
             return
-        gl.get_contract_at(recipient).emit_transfer(value=u256(amount))
+        dest = _to_address(recipient)
+        _EoaRecipient(dest).emit_transfer(value=u256(amount))
+
+    def _set_payout_recipient(self, m: Match, recipient: Address) -> None:
+        m.payout_recipient = _to_address(recipient)
 
     def _declared_winner_addr(self, m: Match) -> Address:
         if m.declared_winner == "A":
@@ -478,6 +483,7 @@ class Contract(gl.Contract):
             verdict_reason="",
             confidence=u256(0),
             settled=False,
+            payout_recipient=ZERO_ADDR,
         )
         return match_id
 
@@ -536,6 +542,7 @@ class Contract(gl.Contract):
 
         m.status = EXPIRED_REFUNDED
         m.settled = True
+        self._set_payout_recipient(m, m.organizer)
         self.matches[match_id] = m
         try:
             self._try_transfer(m.organizer, m.prize_amount)
@@ -613,6 +620,7 @@ class Contract(gl.Contract):
         winner = self._declared_winner_addr(m)
         m.status = RESOLVED_UNCHALLENGED
         m.settled = True
+        self._set_payout_recipient(m, winner)
         self.matches[match_id] = m
         try:
             self._try_transfer(winner, m.prize_amount)
@@ -743,6 +751,7 @@ class Contract(gl.Contract):
         else:
             raise UserError("No stored verdict to settle")
 
+        self._set_payout_recipient(m, payout_winner)
         try:
             self._try_transfer(payout_winner, m.prize_amount)
             m.settled = True
@@ -788,6 +797,7 @@ class Contract(gl.Contract):
         )
         m.status = RESOLVED_TIMEOUT_REFUND
         m.settled = True
+        self._set_payout_recipient(m, m.organizer)
         self.matches[match_id] = m
         try:
             self._try_transfer(m.organizer, m.prize_amount)
@@ -799,17 +809,18 @@ class Contract(gl.Contract):
 
     @gl.public.write
     def retry_resolution(self, match_id: str) -> None:
-        """Retry payout using stored verdict/result. Does not re-run AI."""
+        """Permissionless retry using stored verdict and payout_recipient. Does not re-run AI."""
         m = self._require_match(match_id)
-        sender = gl.message.sender_address
-        if not self._is_party(m, sender):
-            raise UserError("Only players or organizer can retry")
         if m.status != PAYOUT_FAILED:
             raise UserError("Can only retry PAYOUT_FAILED matches")
         if m.settled:
             raise UserError("Match already settled")
 
         recipient, new_status = self._retry_recipient_and_status(m)
+        if not _is_zero(m.payout_recipient):
+            recipient = m.payout_recipient
+        else:
+            self._set_payout_recipient(m, recipient)
         try:
             self._try_transfer(recipient, m.prize_amount)
             m.settled = True
@@ -847,6 +858,7 @@ class Contract(gl.Contract):
             "verdict_reason": m.verdict_reason,
             "confidence": int(m.confidence),
             "settled": bool(m.settled),
+            "payout_recipient": _addr_str(m.payout_recipient),
         }
         if full:
             row["challenge_evidence_urls"] = _urls_to_list(m.challenge_evidence_urls)
@@ -877,3 +889,17 @@ class Contract(gl.Contract):
     @gl.public.view
     def get_owner(self) -> str:
         return _addr_str(self.owner)
+
+    @gl.public.view
+    def get_approved_hosts(self) -> str:
+        out = []
+        for h in ALLOWED_RECORD_HOSTS:
+            out.append(h)
+        return json.dumps(out)
+
+    @gl.public.view
+    def get_escrow_balance(self) -> str:
+        try:
+            return str(int(self.balance))
+        except Exception:
+            return "0"
