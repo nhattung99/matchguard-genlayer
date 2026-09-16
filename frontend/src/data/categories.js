@@ -60,6 +60,11 @@ export const EXAMPLE_PLAYER_B_TAG = 'device';
 export const EXAMPLE_REPLAY_HASH = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 export const RECORD_ORIGIN = 'https://matchguard-genlayer.vercel.app';
+export const BLOCKED_ENCYCLOPEDIA_HOSTS = [
+  'wikipedia.org',
+  'mediawiki.org',
+  'wikidata.org',
+];
 export const ALLOWED_RECORD_HOSTS = [
   'matchguard-genlayer.vercel.app',
   'faceit.com',
@@ -114,7 +119,15 @@ function hostAndPath(url) {
   return { host, path };
 }
 
+function hostBlocked(host) {
+  if (host.includes('wikipedia') || host.includes('mediawiki') || host.includes('wikidata')) {
+    return true;
+  }
+  return BLOCKED_ENCYCLOPEDIA_HOSTS.some((blocked) => host === blocked || host.endsWith(`.${blocked}`));
+}
+
 function hostAllowed(host) {
+  if (hostBlocked(host)) return false;
   return ALLOWED_RECORD_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
 }
 
@@ -123,6 +136,11 @@ export function assertUrlBound(url, platformMatchId) {
   const mid = String(platformMatchId || '').trim();
   if (!mid) throw new Error('platform_match_id is required.');
   const { host, path } = hostAndPath(norm);
+  if (hostBlocked(host)) {
+    throw new Error(
+      'Generic encyclopedia pages (Wikipedia) are not match records; use an approved tournament, platform, replay, or anti-cheat URL whose path contains platform_match_id.',
+    );
+  }
   if (!hostAllowed(host)) {
     throw new Error('URL host is not an approved tournament, platform, replay, or anti-cheat issuer.');
   }

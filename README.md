@@ -13,7 +13,7 @@ https://matchguard-genlayer.vercel.app
 - **Network:** studionet (GenLayer Studio hosted)
 - **Address:** `0x96C3EeFd87855Df9765ABCA688946456c284c899`
 - **Explorer:** https://explorer-studio.genlayer.com/address/0x96C3EeFd87855Df9765ABCA688946456c284c899
-- **Source on GitHub:** [`contracts/match_guard.py`](contracts/match_guard.py) — this file is the Studio deploy (allowlisted issuers + `_EoaRecipient` EOA payout). Constructor **SUCCESS** on 2026-09-13.
+- **Source on GitHub:** [`contracts/match_guard.py`](contracts/match_guard.py) — this file is the Studio deploy (allowlisted issuers, **Wikipedia blocked by host**, `_EoaRecipient` EOA payout). Constructor **SUCCESS** on 2026-09-13.
 
 ### Live proof (Match #1)
 

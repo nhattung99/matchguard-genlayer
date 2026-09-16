@@ -6,12 +6,12 @@ Run from the repository root (requires `gltest` / `genlayer-test` and Node for f
 gltest tests/test_match_guard.py
 ```
 
-Recorded locally 2026-09-13 after allowlist + EOA `_EoaRecipient` payout fix:
+Recorded locally 2026-09-16 after explicit Wikipedia encyclopedia block:
 
 ```
-collected 29 items
-tests/test_match_guard.py .............................                  [100%]
-============================= 29 passed in 4.99s ==============================
+collected 30 items
+tests/test_match_guard.py ..............................                 [100%]
+============================= 30 passed in 14.63s ==============================
 ```
 
 Config: [`gltest.config.yaml`](../gltest.config.yaml) (`default: localnet`). Contract under test: [`contracts/match_guard.py`](../contracts/match_guard.py).
@@ -29,6 +29,7 @@ Critical contract cases in `tests/test_match_guard.py`:
 - mismatched `platform_match_id` / non-participant tag
 - altered replay hash
 - Wikipedia host, query-only `?match=` binding, and unallowlisted issuers rejected
+- `test_critical_match_specific_evidence_model`: generic Wikipedia without match ID rejected; Wikipedia with match ID still rejected; create requires game + external match ID; declare stores committed official/replay identifiers
 - duplicate / overlapping / committed-identifier replacement
 - failed `web.render` and invalid JSON (stay `CHALLENGED`)
 - low-confidence freeze (no evidence replacement)

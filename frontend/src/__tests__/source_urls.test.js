@@ -34,11 +34,11 @@ assert(threw, 'wikipedia query binding must fail');
 
 threw = false;
 try {
-  assertUrlBound(`https://en.wikipedia.org/wiki/${EXAMPLE_PLATFORM_MATCH_ID}`, EXAMPLE_PLATFORM_MATCH_ID);
-} catch {
-  threw = true;
+  assertUrlBound('https://en.wikipedia.org/wiki/Cheating_in_online_games', EXAMPLE_PLATFORM_MATCH_ID);
+} catch (err) {
+  threw = String(err && err.message || err).toLowerCase().includes('wikipedia');
 }
-assert(threw, 'wikipedia path must fail');
+assert(threw, 'generic wikipedia without match id must fail as encyclopedia');
 
 threw = false;
 try {

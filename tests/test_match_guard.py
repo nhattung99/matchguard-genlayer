@@ -18,6 +18,7 @@ REF1 = "https://api.faceit.com/match/v2/match/" + MID
 REF2 = "https://www.faceit.com/en/cs2/bracket/" + MID
 WIKI_QUERY = "https://en.wikipedia.org/wiki/FACEIT?match=" + MID
 WIKI_PATH = "https://en.wikipedia.org/wiki/" + MID
+WIKI_GENERIC = "https://en.wikipedia.org/wiki/Cheating_in_online_games"
 QUERY_ONLY = "https://www.faceit.com/en/cs2/room?match=" + MID
 FAR_FUTURE = 4102444800  # 2100-01-01
 PAST = 1
@@ -917,6 +918,65 @@ def test_wikipedia_and_query_only_binding_rejected(direct_vm, direct_deploy, dir
     assert row["game_title"] == GAME
     assert row["official_result_url"] == OFFICIAL
     assert row["replay_content_hash"] == REPLAY_HASH
+
+
+def test_critical_match_specific_evidence_model(direct_vm, direct_deploy, direct_accounts):
+    """Wikipedia is never a match record. Identity and evidence identifiers must be committed."""
+    organizer = direct_accounts[1]
+    player_a = direct_accounts[2]
+    player_b = direct_accounts[3]
+    contract = direct_deploy(CONTRACT_PATH)
+    vm = _active_vm(direct_vm)
+
+    blocked = _parse(contract.get_blocked_hosts())
+    assert "wikipedia.org" in blocked
+
+    vm.sender = organizer
+    _set_value(vm, 1000)
+    with pytest.raises(Exception):
+        contract.create_match(
+            player_a, player_b, "desc", FAR_FUTURE, LONG_WINDOW, "CS", "", TAG_A, TAG_B, PLAYED_AT, REPLAY_HASH
+        )
+    with pytest.raises(Exception):
+        contract.create_match(
+            player_a, player_b, "desc", FAR_FUTURE, LONG_WINDOW, "", MID, TAG_A, TAG_B, PLAYED_AT, REPLAY_HASH
+        )
+    _clear_value(vm)
+
+    match_id = _create(contract, vm, organizer, player_a, player_b)
+    created = _match(contract, match_id)
+    assert created["platform_match_id"] == MID
+    assert created["game_title"] == GAME
+    assert created["player_a_tag"] == TAG_A
+    assert created["player_b_tag"] == TAG_B
+    assert created["replay_content_hash"] == REPLAY_HASH
+    assert created["official_result_url"] == ""
+    assert created["replay_or_vod_url"] == ""
+
+    vm.sender = player_a
+    with pytest.raises(Exception, match=r"(?i)wikipedia|encyclopedia|approved"):
+        contract.declare_result(match_id, "A", WIKI_GENERIC, REPLAY, REPLAY_HASH)
+    with pytest.raises(Exception, match=r"(?i)wikipedia|encyclopedia|approved"):
+        contract.declare_result(match_id, "A", WIKI_PATH, REPLAY, REPLAY_HASH)
+    with pytest.raises(Exception, match=r"(?i)wikipedia|encyclopedia|approved"):
+        contract.declare_result(match_id, "A", WIKI_QUERY, REPLAY, REPLAY_HASH)
+
+    _declare(contract, vm, player_a, match_id, "A")
+    declared = _match(contract, match_id)
+    assert declared["official_result_url"] == OFFICIAL
+    assert declared["replay_or_vod_url"] == REPLAY
+    assert declared["platform_match_id"] == MID
+    assert declared["game_title"] == GAME
+
+    vm.sender = player_b
+    with pytest.raises(Exception, match=r"(?i)wikipedia|encyclopedia|approved"):
+        contract.challenge_result(match_id, MID, TAG_A, "ANTI_CHEAT", [WIKI_GENERIC], [REF1, REF2])
+    _challenge(contract, vm, player_b, match_id)
+    challenged = _match(contract, match_id)
+    assert challenged["evidence_frozen"] is True
+    assert challenged["attestation_kind"] == "ANTI_CHEAT"
+    assert challenged["accused_player_tag"] == TAG_A
+    assert EVIDENCE in challenged["challenge_evidence_urls"]
 
 
 def test_unallowlisted_issuer_rejected(direct_vm, direct_deploy, direct_accounts):

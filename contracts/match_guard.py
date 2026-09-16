@@ -44,6 +44,12 @@ ALLOWED_RECORD_HOSTS = (
     "esl.com",
     "esea.net",
 )
+# Generic encyclopedias are never match records, even if the path contains a match ID.
+BLOCKED_ENCYCLOPEDIA_HOSTS = (
+    "wikipedia.org",
+    "mediawiki.org",
+    "wikidata.org",
+)
 
 
 @gl.evm.contract_interface
@@ -276,7 +282,18 @@ def _url_host_and_path(url: str):
     return host, path
 
 
+def _host_blocked(host: str) -> bool:
+    if "wikipedia" in host or "mediawiki" in host or "wikidata" in host:
+        return True
+    for blocked in BLOCKED_ENCYCLOPEDIA_HOSTS:
+        if host == blocked or host.endswith("." + blocked):
+            return True
+    return False
+
+
 def _host_allowed(host: str) -> bool:
+    if _host_blocked(host):
+        return False
     for allowed in ALLOWED_RECORD_HOSTS:
         if host == allowed or host.endswith("." + allowed):
             return True
@@ -284,12 +301,20 @@ def _host_allowed(host: str) -> bool:
 
 
 def _assert_bound(url: str, platform_match_id: str) -> str:
-    """Approved-issuer record bound to the committed platform_match_id.
+    """Authoritative match-linked record bound to the committed platform_match_id.
 
-    Query-string binding (?match=ID) is rejected. Host must be on ALLOWED_RECORD_HOSTS.
+    Generic Wikipedia / encyclopedia pages are rejected even when a match ID is
+    stuffed into the path or ?match= query. Host must be on ALLOWED_RECORD_HOSTS.
+    The path (not the query string) must contain platform_match_id.
     """
     norm = _parse_https_url(url)
     host, path = _url_host_and_path(norm)
+    if _host_blocked(host):
+        raise UserError(
+            "Generic encyclopedia pages (Wikipedia) are not match records; "
+            "use an approved tournament, platform, replay, or anti-cheat URL "
+            "whose path contains platform_match_id"
+        )
     if not _host_allowed(host):
         raise UserError("URL host is not an approved tournament, platform, replay, or anti-cheat issuer")
     mid = str(platform_match_id).strip()
@@ -894,6 +919,13 @@ class Contract(gl.Contract):
     def get_approved_hosts(self) -> str:
         out = []
         for h in ALLOWED_RECORD_HOSTS:
+            out.append(h)
+        return json.dumps(out)
+
+    @gl.public.view
+    def get_blocked_hosts(self) -> str:
+        out = []
+        for h in BLOCKED_ENCYCLOPEDIA_HOSTS:
             out.append(h)
         return json.dumps(out)
 
