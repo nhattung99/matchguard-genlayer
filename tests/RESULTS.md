@@ -1,20 +1,22 @@
 # Reproducible test results
 
-Run from the repository root (requires `gltest` / `genlayer-test` and Node for frontend checks).
+Run from the repository root (requires `gltest` / `genlayer-test` and Node for frontend checks):
 
 ```bash
 gltest tests/test_match_guard.py
 ```
 
-Recorded locally 2026-09-16 after explicit Wikipedia encyclopedia block:
+Recorded locally 2026-09-21 after deterministic EthSend harness for `_EoaRecipient` payouts:
 
 ```
 collected 30 items
 tests/test_match_guard.py ..............................                 [100%]
-============================= 30 passed in 14.63s ==============================
+============================= 30 passed in 2.64s ==============================
 ```
 
 Config: [`gltest.config.yaml`](../gltest.config.yaml) (`default: localnet`). Contract under test: [`contracts/match_guard.py`](../contracts/match_guard.py).
+
+EthSend / transfer mocks live in [`tests/transfer_mock.py`](transfer_mock.py) and are installed by [`tests/conftest.py`](conftest.py) so adjudication, retry, and balance cases do not depend on an unknown `gl_call`.
 
 Frontend (from `frontend/`):
 
@@ -26,14 +28,10 @@ npm run check:float
 
 Critical contract cases in `tests/test_match_guard.py`:
 
-- mismatched `platform_match_id` / non-participant tag
-- altered replay hash
-- Wikipedia host, query-only `?match=` binding, and unallowlisted issuers rejected
-- `test_critical_match_specific_evidence_model`: generic Wikipedia without match ID rejected; Wikipedia with match ID still rejected; create requires game + external match ID; declare stores committed official/replay identifiers
-- duplicate / overlapping / committed-identifier replacement
-- failed `web.render` and invalid JSON (stay `CHALLENGED`)
+- `NO_CHEAT` / `CHEAT_CONFIRMED` adjudication and unchallenged payout
 - low-confidence freeze (no evidence replacement)
-- timeout recovery + failed payout then `retry_resolution`
-- successful `NO_CHEAT` / `CHEAT_CONFIRMED` / unchallenged settlement
-- `PAYOUT_FAILED` preserves verdict + `payout_recipient`; retry does not re-run AI
-- prize-amount conservation across NO_CHEAT and CHEAT_CONFIRMED
+- failed transfer → `PAYOUT_FAILED` → `retry_resolution` (unchallenged, no-cheat, cheat-confirmed, expired, timeout)
+- prize-amount / payout-recipient conservation across NO_CHEAT and CHEAT_CONFIRMED
+- Wikipedia / encyclopedia hosts blocked; query-only and unallowlisted issuers rejected
+- committed `platform_match_id`, game title, tags, official/replay identifiers
+- timeout recovery for stuck CHALLENGED / DISPUTED_LOW_CONFIDENCE

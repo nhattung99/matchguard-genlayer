@@ -137,7 +137,7 @@ npm run test:urls
 npm run check:float
 ```
 
-Latest recorded run: see [`tests/RESULTS.md`](tests/RESULTS.md). Config: [`gltest.config.yaml`](gltest.config.yaml).
+Latest recorded run: **30 passed** (see [`tests/RESULTS.md`](tests/RESULTS.md)). Config: [`gltest.config.yaml`](gltest.config.yaml). EthSend is mocked in `tests/transfer_mock.py` so adjudication / failed-transfer / retry / balance cases stay deterministic under `gltest`.
 
 Coverage includes: unchallenged payout after the window, NO_CHEAT keeps the declared winner, CHEAT_CONFIRMED reverses the winner, expired refund, declare after deadline, challenge after window closed, missing URLs, mismatched match IDs, participant mismatch, altered replay hash, Wikipedia / query-only / unallowlisted-host binding rejected, unbound/http/duplicate/overlapping sources, evidence freeze after low-confidence, failed rendering / broken JSON, double-declare / double-challenge / double-resolve, permissionless timeout refund for stuck CHALLENGED and DISPUTED_LOW_CONFIDENCE, prize-amount conservation across NO_CHEAT + CHEAT_CONFIRMED, and real `emit_transfer` exceptions on unchallenged / NO_CHEAT / CHEAT_CONFIRMED / expired-refund / timeout-refund → `PAYOUT_FAILED` (verdict + `payout_recipient` preserved) → successful `retry_resolution`.
 
