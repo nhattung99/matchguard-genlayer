@@ -6,15 +6,18 @@ Run from the repository root (requires `gltest` / `genlayer-test` ≥ 0.29 and N
 gltest tests/test_match_guard.py
 ```
 
-Recorded locally 2026-09-22 after module-level EthSend wasi patch + contract payout fallback:
+Recorded locally 2026-09-22 (fresh re-run before resubmit):
 
 ```
 collected 30 items
 tests/test_match_guard.py ..............................                 [100%]
-============================= 30 passed in 6.36s ==============================
+============================= 30 passed in 2.85s ==============================
 ```
 
+Also green: `npm run test:urls`, `npm run test:money`, `npm run check:float`.
+
 Config: [`gltest.config.yaml`](../gltest.config.yaml) (`default: localnet`). Contract: [`contracts/match_guard.py`](../contracts/match_guard.py).
+GitHub commit: `8362fd5`.
 
 Payout under test:
 - Contract prefers `_EoaRecipient.emit_transfer` (studionet `Send`), then falls back to `gl.get_contract_at(...).emit_transfer` for gltest `_EOAProxy`.
