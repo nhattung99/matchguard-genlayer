@@ -409,11 +409,26 @@ class Contract(gl.Contract):
         return self._is_player(m, sender) or _same_addr(sender, m.organizer)
 
     def _try_transfer(self, recipient: Address, amount: bigint) -> None:
-        """External EOA transfer. get_contract_at(EOA).emit_transfer creates a failing IC child tx."""
+        """Pay an EOA. Prefer `_EoaRecipient` (studionet Send). Fall back to
+        `get_contract_at` for gltest direct mode when EthSend is unsupported.
+        """
         if amount <= bigint(0):
             return
         dest = _to_address(recipient)
-        _EoaRecipient(dest).emit_transfer(value=u256(amount))
+        amount_u = u256(amount)
+        first_err = None
+        try:
+            _EoaRecipient(dest).emit_transfer(value=amount_u)
+            return
+        except Exception as e:
+            first_err = e
+        try:
+            gl.get_contract_at(dest).emit_transfer(value=amount_u)
+            return
+        except Exception as e:
+            if first_err is not None:
+                raise first_err
+            raise e
 
     def _set_payout_recipient(self, m: Match, recipient: Address) -> None:
         m.payout_recipient = _to_address(recipient)

@@ -3,6 +3,13 @@ import re
 import sys
 import pytest
 
+try:
+    from transfer_mock import install_wasi_ethsend_patch
+
+    install_wasi_ethsend_patch()
+except Exception:
+    pass
+
 CONTRACT_PATH = "contracts/match_guard.py"
 
 MID = "FACEIT-CS2-88421"
@@ -267,8 +274,10 @@ def test_happy_path_no_cheat_keeps_declared_winner(direct_vm, direct_deploy, dir
     row = _match(contract, match_id)
     assert row["status"] == "RESOLVED_NO_CHEAT"
     assert row["verdict"] == "NO_CHEAT"
-    assert row["confidence"] == 91
+    assert int(row["confidence"]) == 91
     assert row["settled"] is True
+    assert row["payout_recipient"].lower() == _addr(player_a).lower()
+    assert int(row["prize_amount"]) == 2500
 
 
 def test_happy_path_cheat_confirmed_reverses_winner(direct_vm, direct_deploy, direct_accounts):
@@ -294,6 +303,9 @@ def test_happy_path_cheat_confirmed_reverses_winner(direct_vm, direct_deploy, di
     assert row["status"] == "RESOLVED_CHEAT_CONFIRMED"
     assert row["verdict"] == "CHEAT_CONFIRMED"
     assert row["settled"] is True
+    assert int(row["confidence"]) == 94
+    assert row["payout_recipient"].lower() == _addr(player_b).lower()
+    assert int(row["prize_amount"]) == 2500
 
 
 def test_expired_no_result_organizer_refund(direct_vm, direct_deploy, direct_accounts):
@@ -388,7 +400,9 @@ def test_low_confidence_disputed_then_rechallenge(direct_vm, direct_deploy, dire
     row = _match(contract, match_id)
     assert row["status"] == "DISPUTED_LOW_CONFIDENCE"
     assert row["settled"] is False
-    assert row["confidence"] == 41
+    assert int(row["confidence"]) == 41
+    assert row["evidence_frozen"] is True
+    assert row["verdict"] == "NO_CHEAT"
 
     vm.sender = player_b
     with pytest.raises(Exception):
